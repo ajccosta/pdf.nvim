@@ -6,6 +6,25 @@ vim.api.nvim_create_autocmd('BufReadCmd', {
     require('pdf').open(ev.buf)
   end,
 })
+-- another file in a window that had a PDF: the window's own options back; a
+-- window split from a PDF's keeps what the PDF's had to give back
+vim.api.nvim_create_autocmd('BufWinEnter', {
+  group = group,
+  callback = function(ev)
+    if not vim.b[ev.buf].pdf then
+      require('pdf').window_options(false)
+    end
+  end,
+})
+vim.api.nvim_create_autocmd('WinNew', {
+  group = group,
+  callback = function()
+    local prev = vim.fn.win_getid(vim.fn.winnr('#'))
+    if vim.b.pdf and vim.w[prev].pdf_saved then
+      vim.w.pdf_saved = vim.w[prev].pdf_saved
+    end
+  end,
+})
 -- a window resize or another window's text over the page
 vim.api.nvim_create_autocmd({ 'VimResized', 'WinResized' }, {
   group = group,

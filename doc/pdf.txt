@@ -39,6 +39,11 @@ per action in `keys` (|pdf.nvim-setup|).
                           :PdfPosition right top
                           :PdfPosition 0.25
 <
+                        The choice is remembered across sessions (in
+                        stdpath('state')/pdf.nvim.json) and wins over
+                        `position` in |pdf.nvim-setup|; delete that file to
+                        go back to it.
+
                         A page fitting its window's width (`w`, how it opens)
                         fills the width, so only fitting the whole page (`0`)
                         shows where it sits across.

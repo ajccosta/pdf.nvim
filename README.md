@@ -53,4 +53,4 @@ require('pdf').setup({
 
 `:PdfPosition {across} [{down}]` moves the page while reading: `left`, `center`
 or `right`, then `top`, `center` or `bottom`, or a fraction from 0 to 1
-(`:PdfPosition 0.25`).
+(`:PdfPosition 0.25`). The choice is remembered across sessions.

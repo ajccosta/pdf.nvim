@@ -46,6 +46,43 @@ local function fraction(p)
   return math.max(0, math.min(1, tonumber(p) or M.positions[p] or 0.5))
 end
 
+-- The settings a command changes, remembered across sessions: they win over
+-- setup's, which are the defaults until one is chosen.
+M.remembered = { 'position' }
+local state_file = vim.fn.stdpath('state') .. '/pdf.nvim.json'
+
+local function saved()
+  local f = io.open(state_file, 'r')
+  if not f then
+    return {}
+  end
+  local ok, t = pcall(vim.json.decode, f:read('*a'))
+  f:close()
+  return ok and type(t) == 'table' and t or {}
+end
+
+-- remember(name, value): set config[name] for this and later sessions.
+local function remember(name, value)
+  M.config[name] = value
+  local t = saved()
+  t[name] = value
+  vim.fn.mkdir(vim.fn.fnamemodify(state_file, ':h'), 'p')
+  local f = io.open(state_file, 'w')
+  if f then
+    f:write(vim.json.encode(t))
+    f:close()
+  end
+end
+
+local function apply_saved()
+  local t = saved()
+  for _, name in ipairs(M.remembered) do
+    if t[name] ~= nil then
+      M.config[name] = t[name]
+    end
+  end
+end
+
 local root = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':h:h:h')
 local cache = vim.fn.stdpath('cache') .. '/pdf.nvim'
 
@@ -403,6 +440,33 @@ local actions = {
   fit_width = function() M.fit_width() end,
 }
 
+-- The options a PDF's window has, so all its columns are the page's.
+M.pdf_window = { number = false, relativenumber = false, signcolumn = 'no', foldcolumn = '0' }
+
+-- window_options(pdf): give the current window a PDF's options, keeping what
+-- it had; or, pdf false, give it back what it had. Window options go with the
+-- window, not the buffer, so the next file in it would have them too.
+function M.window_options(pdf)
+  local saved = vim.w.pdf_saved
+  if pdf then
+    if not saved then
+      saved = {}
+      for name in pairs(M.pdf_window) do
+        saved[name] = vim.wo[name]
+      end
+      vim.w.pdf_saved = saved
+    end
+    for name, value in pairs(M.pdf_window) do
+      vim.wo[0][0][name] = value
+    end
+  elseif saved then
+    for name, value in pairs(saved) do
+      vim.wo[0][0][name] = value
+    end
+    vim.w.pdf_saved = nil
+  end
+end
+
 -- open(buf): what replaces reading a .pdf into buf.
 function M.open(buf)
   local file = vim.api.nvim_buf_get_name(buf)
@@ -417,16 +481,12 @@ function M.open(buf)
     end
   end
   -- the window's columns all for the page
-  local function plain()
-    vim.opt_local.number, vim.opt_local.relativenumber = false, false
-    vim.opt_local.signcolumn, vim.opt_local.foldcolumn = 'no', '0'
-  end
-  vim.api.nvim_create_autocmd('BufWinEnter', { buffer = buf, callback = plain })
+  vim.api.nvim_create_autocmd('BufWinEnter', { buffer = buf, callback = function() M.window_options(true) end })
   vim.api.nvim_create_autocmd({ 'BufWinEnter', 'WinScrolled', 'FocusGained', 'CmdlineLeave' }, {
     buffer = buf,
     callback = function() M.redraw(true) end,
   })
-  plain()
+  M.window_options(true)
   M.redraw(true)
 end
 
@@ -445,12 +505,15 @@ function M.position(across, down)
     return vim.notify('pdf.nvim: :PdfPosition {left|center|right|0-1} [{top|center|bottom|0-1}]'
       .. ' (:help :PdfPosition)', vim.log.levels.ERROR)
   end
-  M.config.position = { across, down or M.config.position[2] }
+  remember('position', { across, down or M.config.position[2] })
   M.redraw(true)
 end
 
 function M.setup(opts)
   M.config = vim.tbl_deep_extend('force', M.config, opts or {})
+  apply_saved()
 end
+
+apply_saved()
 
 return M
