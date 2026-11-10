@@ -9,6 +9,9 @@ M.config = {
   scale = 2, -- render this many times the screen size (retina)
   scale_scrolling = 1, -- and this many while scrolling, which is faster
   sharp_after = 150, -- ms without scrolling before the sharp frame
+  -- scroll by having the terminal move the page up or down whole rows and
+  -- drawing only the rows that come in: sharp all along, and little to send
+  smooth = true,
   view = 'width', -- a PDF opens fitting its width; 1 fits the whole page
   -- where the page sits when it is smaller than the window: across (left,
   -- center, right) and down (top, center, bottom), or a fraction from 0 to 1
@@ -134,7 +137,8 @@ local function request(req, cb)
   end
 end
 
-local function send(png, box)
+-- send(png, box, before): draw png in box's cells, after the escapes before.
+local function send(png, box, before)
   local f = io.open(png, 'rb')
   if not f then
     return
@@ -142,8 +146,8 @@ local function send(png, box)
   local data = vim.base64.encode(f:read('*a'))
   f:close()
   vim.api.nvim_ui_send(string.format(
-    '\0277\027[%d;%dH\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\007\0278',
-    box.row, box.col, box.w, box.h, data))
+    '\0277%s\027[%d;%dH\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\007\0278',
+    before or '', box.row, box.col, box.w, box.h, data))
 end
 
 local function status(st)
@@ -154,6 +158,10 @@ end
 -- draw(win, clear, scale): render win's page and draw it. nvim's own redraw
 -- (:mode) wipes the old image first when clear is set or the image's cells
 -- change; otherwise the new image covers the old one, without a flicker.
+-- What each window shows, from its last whole frame on: its page, scale,
+-- offset in pixels (py), where its scroll is going (target), and its cells.
+local shown = {}
+
 local function draw(win, clear, scale)
   if not vim.api.nvim_win_is_valid(win) then
     return
@@ -171,12 +179,14 @@ local function draw(win, clear, scale)
     return
   end
   local cw, ch = cell_size()
+  -- a cell's size in pixels, whole so rows stack exactly
+  local cpx, rpx = math.floor(cw * scale + 0.5), math.floor(ch * scale + 0.5)
   vim.fn.mkdir(cache, 'p')
   local png = string.format('%s/%d-%d.png', cache, vim.fn.getpid(), win)
+  shown[win] = nil
   request({
     id = win, file = st.file, page = st.page, zoom = st.zoom,
-    x = st.x, y = st.y, out = png,
-    width = math.floor(cols * cw * scale), height = math.floor(rows * ch * scale),
+    x = st.x, y = st.y, out = png, width = cols * cpx, height = rows * rpx,
   }, function(r)
     if r.error then
       return vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
@@ -191,8 +201,8 @@ local function draw(win, clear, scale)
     end
     now.count, now.mx, now.my, now.vw, now.vh = r.count, r.mx, r.my, r.vw, r.vh
     vim.b[buf].pdf = now
-    local w = math.min(cols, math.ceil(r.iw / scale / cw))
-    local h = math.min(rows, math.ceil(r.ih / scale / ch))
+    local w = math.min(cols, math.ceil(r.iw / cpx))
+    local h = math.min(rows, math.ceil(r.ih / rpx))
     local box = {
       row = info.winrow + math.floor((rows - h) * fraction(M.config.position[2])),
       col = info.wincol + info.textoff + math.floor((cols - w) * fraction(M.config.position[1])),
@@ -202,6 +212,12 @@ local function draw(win, clear, scale)
     if vim.api.nvim_get_current_buf() == buf then
       status(now)
     end
+    shown[win] = {
+      file = st.file, page = st.page, scale = r.scale, px = r.px, py = r.py, pxh = r.pxh,
+      iw = r.iw, rows = rows, rpx = rpx, box = box, png = png,
+      -- only a sharp frame filling the window's height scrolls by rows
+      rolls = scale == M.config.scale and h == rows and r.ih == rows * rpx,
+    }
     if clear or not vim.deep_equal(vim.w[win].pdf_box, box) then
       vim.w[win].pdf_box = box
       vim.cmd('mode')
@@ -249,9 +265,85 @@ function M.go(n)
   end)
 end
 
+-- roll(sh, d): the escapes that move sh's image d rows up (down when d < 0)
+-- inside its cells, leaving the rest of the screen be.
+local function roll(sh, d)
+  local b = sh.box
+  local margins = b.col > 1 or b.col + b.w - 1 < vim.o.columns
+  return table.concat({
+    margins and '\027[?69h' or '',
+    string.format('\027[%d;%dr', b.row, b.row + b.h - 1),
+    margins and string.format('\027[%d;%ds', b.col, b.col + b.w - 1) or '',
+    string.format('\027[%d;%dH', b.row, b.col),
+    d > 0 and string.format('\027[%dS', d) or string.format('\027[%dT', -d),
+    margins and '\027[?69l' or '',
+    '\027[r',
+  })
+end
+
+-- pump(win): move win's image toward its target, a strip of rows at a time.
+local function pump(win)
+  local sh = shown[win]
+  if not sh or sh.busy or not sh.target or sh.target == sh.py then
+    return
+  end
+  local d = (sh.target - sh.py) / sh.rpx
+  if d ~= math.floor(d) or math.abs(d) >= sh.rows then
+    -- not whole rows, or more than the window: all of it again
+    return draw(win, false, M.config.scale)
+  end
+  sh.busy = true
+  local py = d > 0 and sh.py + sh.rows * sh.rpx or sh.target
+  local h = math.abs(d) * sh.rpx
+  request({
+    id = win, file = sh.file, page = sh.page, scale = sh.scale,
+    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png,
+  }, function(r)
+    if shown[win] ~= sh then
+      return
+    end
+    sh.busy = false
+    if r.error or r.py ~= py or r.ih ~= h or r.iw ~= sh.iw then
+      return draw(win, false, M.config.scale)
+    end
+    local b = sh.box
+    send(sh.png, {
+      row = d > 0 and b.row + b.h - d or b.row, col = b.col, w = b.w, h = math.abs(d),
+    }, roll(sh, d))
+    sh.py = sh.py + d * sh.rpx
+    if vim.api.nvim_get_current_win() == win then
+      status(vim.b.pdf)
+    end
+    pump(win)
+  end)
+end
+
+-- roll_to(dy, step): scroll the current window by rows if it can, true if so.
+local function roll_to(dy, step)
+  local win = vim.api.nvim_get_current_win()
+  local sh, st = shown[win], vim.b.pdf
+  if not (M.config.smooth and sh and sh.rolls and sh.page == st.page) then
+    return false
+  end
+  local from = sh.target or sh.py
+  local last = sh.pxh - sh.rows * sh.rpx
+  if (dy > 0 and from >= last) or (dy < 0 and from <= 0) then
+    return false -- on to another page
+  end
+  local rows = math.max(1, math.floor(math.abs(step) * sh.rows + 0.5))
+  sh.target = math.max(0, math.min(from + dy * rows * sh.rpx, last))
+  st.y = sh.target / sh.scale
+  vim.b.pdf = st
+  pump(win)
+  return true
+end
+
 -- scroll(dx, dy, step): move by dx, dy steps of step of the window; past the
 -- bottom or top of the page, on to the next or previous one.
 function M.scroll(dx, dy, step)
+  if dx == 0 and dy ~= 0 and roll_to(dy, step) then
+    return
+  end
   update(function(st)
     st.x = st.x + dx * step * (st.vw or 0)
     if dy > 0 and st.y >= (st.my or 0) and st.page + 1 < (st.count or 1) then
@@ -262,7 +354,7 @@ function M.scroll(dx, dy, step)
       st.y = math.max(0, math.min(st.y + dy * step * (st.vh or 0), st.my or 0))
     end
     st.x = math.max(0, math.min(st.x, st.mx or 0))
-  end, true)
+  end, not (M.config.smooth and dx == 0)) -- sharp, to scroll by rows on from it
 end
 
 -- zoom(by): zoom by a factor, keeping the middle of the window where it is;
@@ -339,8 +431,20 @@ function M.open(buf)
 end
 
 -- position(across, down): where pages sit, as config.position takes it; down
--- nil keeps it.
+-- nil keeps it, and neither shows where they sit now.
 function M.position(across, down)
+  local function valid(p, names)
+    local n = tonumber(p)
+    return (n and n >= 0 and n <= 1) or vim.tbl_contains(names, p)
+  end
+  if not across then
+    local p = M.config.position
+    return vim.notify(string.format('pdf.nvim: pages sit %s, %s (:help :PdfPosition)', p[1], p[2]))
+  end
+  if not valid(across, { 'left', 'center', 'right' }) or (down and not valid(down, { 'top', 'center', 'bottom' })) then
+    return vim.notify('pdf.nvim: :PdfPosition {left|center|right|0-1} [{top|center|bottom|0-1}]'
+      .. ' (:help :PdfPosition)', vim.log.levels.ERROR)
+  end
   M.config.position = { across, down or M.config.position[2] }
   M.redraw(true)
 end

@@ -3,9 +3,12 @@
 `nvim file.pdf` shows the PDF's pages inside Neovim, drawn with iTerm2's
 inline image protocol.
 
-Pages are rendered by a Python process kept running, which cuts each scroll
-step from the page it has drawn: a frame takes some 35 ms while scrolling, then
-a sharp one follows once it stops.
+Scrolling has the terminal move the page up or down whole rows and draws only
+the rows that come in, so it stays sharp and sends little. Pages are rendered
+by a Python process kept running, which cuts each part from the page it has
+drawn.
+
+`:help pdf.nvim` has the keys, commands and settings.
 
 Needs Neovim 0.12+, iTerm2 and a `python3` with [PyMuPDF](https://pymupdf.readthedocs.io)
 (`pip install pymupdf`).
@@ -39,9 +42,9 @@ require('pdf').setup({
   python = 'python3',  -- one with PyMuPDF
   scale = 2,           -- render at twice the screen size (retina)
   view = 'width',      -- open fitting the page's width (1: the whole page)
-  scale_scrolling = 1, -- render at screen size while scrolling (faster)
+  smooth = true,       -- scroll by rows, drawing only the new ones
   scroll = 0.2,        -- a scroll key moves a fifth of the window
-  wheel = 0.05,        -- a wheel tick a twentieth
+  wheel = 0.05,        -- a wheel tick a twentieth (at least a row)
   zoom = 1.25,         -- each zoom step
   position = { 'right', 'center' },  -- where a page smaller than the window sits
   keys = { next = { 'n' } },  -- per action, replaces its keys

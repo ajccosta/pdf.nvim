@@ -1,0 +1,70 @@
+*pdf.txt*  Read PDFs inside Neovim                                     *pdf.nvim*
+
+`nvim file.pdf` shows the PDF's pages in the window, drawn with iTerm2's
+inline image protocol. Needs Neovim 0.12+, iTerm2 and a `python3` with PyMuPDF
+(`pip install pymupdf`).
+
+1. Keys                                                       |pdf.nvim-keys|
+2. Commands                                               |pdf.nvim-commands|
+3. Setup                                                     |pdf.nvim-setup|
+
+==============================================================================
+1. Keys                                                        *pdf.nvim-keys*
+
+In a PDF's window:
+
+  `j` `k` <Down> <Up>, wheel      scroll down / up, on to the next or previous
+                                page past its end
+  `h` `l` <Left> <Right>          scroll left / right
+  `n` `p` <Space> <BS>            next / previous page
+  <PageDown> <PageUp>
+  `gg` `G` <Home> <End>           first / last page
+  `+` `=` `-`                       zoom in / out
+  `w`                             fit the page's width (what a PDF opens with)
+  `0`                             fit the whole page
+
+A count works: `3n` is three pages on, `2+` zooms in twice. The keys are set
+per action in `keys` (|pdf.nvim-setup|).
+
+==============================================================================
+2. Commands                                                *pdf.nvim-commands*
+
+                                                                *:PdfPosition*
+:PdfPosition {across} [{down}]
+                        Where a page smaller than its window sits: {across}
+                        is `left`, `center` or `right`, {down} `top`, `center`
+                        or `bottom`; either can be a fraction from 0 to 1.
+                        Without {down}, down stays as it is: >
+                          :PdfPosition left
+                          :PdfPosition right top
+                          :PdfPosition 0.25
+<
+                        A page fitting its window's width (`w`, how it opens)
+                        fills the width, so only fitting the whole page (`0`)
+                        shows where it sits across.
+
+:PdfPosition            Shows where pages sit now.
+
+==============================================================================
+3. Setup                                                      *pdf.nvim-setup*
+
+`require('pdf').setup({...})` changes any of these (the defaults): >lua
+
+  require('pdf').setup({
+    python = 'python3',   -- one with PyMuPDF
+    scale = 2,            -- render at twice the screen size (retina)
+    view = 'width',       -- open fitting the page's width; 1: the whole page
+    smooth = true,        -- scroll by moving the page whole rows, drawing
+                          -- only the rows that come in
+    position = { 'right', 'center' },  -- see :PdfPosition
+    scroll = 0.2,         -- a scroll key moves a fifth of the window
+    wheel = 0.05,         -- a wheel tick a twentieth (at least a row)
+    zoom = 1.25,          -- each zoom step
+    keys = { next = { 'n' } },  -- per action, replaces its keys
+  })
+<
+The actions in `keys`: `next`, `prev`, `first`, `last`, `down`, `up`, `left`,
+`right`, `wheel_down`, `wheel_up`, `wheel_left`, `wheel_right`, `zoom_in`,
+`zoom_out`, `fit`, `fit_width`.
+
+ vim:tw=78:ts=8:ft=help:norl:
