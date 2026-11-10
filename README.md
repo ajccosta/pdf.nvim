@@ -43,6 +43,11 @@ require('pdf').setup({
   scroll = 0.2,        -- a scroll key moves a fifth of the window
   wheel = 0.05,        -- a wheel tick a twentieth
   zoom = 1.25,         -- each zoom step
+  position = { 'right', 'center' },  -- where a page smaller than the window sits
   keys = { next = { 'n' } },  -- per action, replaces its keys
 })
 ```
+
+`:PdfPosition {across} [{down}]` moves the page while reading: `left`, `center`
+or `right`, then `top`, `center` or `bottom`, or a fraction from 0 to 1
+(`:PdfPosition 0.25`).

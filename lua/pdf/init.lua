@@ -10,6 +10,9 @@ M.config = {
   scale_scrolling = 1, -- and this many while scrolling, which is faster
   sharp_after = 150, -- ms without scrolling before the sharp frame
   view = 'width', -- a PDF opens fitting its width; 1 fits the whole page
+  -- where the page sits when it is smaller than the window: across (left,
+  -- center, right) and down (top, center, bottom), or a fraction from 0 to 1
+  position = { 'right', 'center' },
   scroll = 0.2, -- a scroll key moves this much of the window
   wheel = 0.05, -- and a wheel tick this much
   zoom = 1.25, -- a zoom in or out multiplies by this
@@ -32,6 +35,13 @@ M.config = {
     fit_width = { 'w' },
   },
 }
+
+-- The positions by name, as fractions of the room left around the page.
+M.positions = { left = 0, top = 0, center = 0.5, right = 1, bottom = 1 }
+
+local function fraction(p)
+  return math.max(0, math.min(1, tonumber(p) or M.positions[p] or 0.5))
+end
 
 local root = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':h:h:h')
 local cache = vim.fn.stdpath('cache') .. '/pdf.nvim'
@@ -184,8 +194,8 @@ local function draw(win, clear, scale)
     local w = math.min(cols, math.ceil(r.iw / scale / cw))
     local h = math.min(rows, math.ceil(r.ih / scale / ch))
     local box = {
-      row = info.winrow + math.floor((rows - h) / 2),
-      col = info.wincol + info.textoff + math.floor((cols - w) / 2),
+      row = info.winrow + math.floor((rows - h) * fraction(M.config.position[2])),
+      col = info.wincol + info.textoff + math.floor((cols - w) * fraction(M.config.position[1])),
       w = w,
       h = h,
     }
@@ -314,10 +324,24 @@ function M.open(buf)
       vim.keymap.set('n', key, actions[action], { buffer = buf, nowait = true })
     end
   end
+  -- the window's columns all for the page
+  local function plain()
+    vim.opt_local.number, vim.opt_local.relativenumber = false, false
+    vim.opt_local.signcolumn, vim.opt_local.foldcolumn = 'no', '0'
+  end
+  vim.api.nvim_create_autocmd('BufWinEnter', { buffer = buf, callback = plain })
   vim.api.nvim_create_autocmd({ 'BufWinEnter', 'WinScrolled', 'FocusGained', 'CmdlineLeave' }, {
     buffer = buf,
     callback = function() M.redraw(true) end,
   })
+  plain()
+  M.redraw(true)
+end
+
+-- position(across, down): where pages sit, as config.position takes it; down
+-- nil keeps it.
+function M.position(across, down)
+  M.config.position = { across, down or M.config.position[2] }
   M.redraw(true)
 end
 
