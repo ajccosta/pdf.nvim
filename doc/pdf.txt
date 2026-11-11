@@ -38,6 +38,9 @@ The wheel scrolls the window under the mouse: the page when over it, from any
 window, and the other windows as usual. The rest of the keys act in the PDF's
 window, so go to another (CTRL-W h, CTRL-W l, or a click) to type there.
 
+A paste into a PDF's window (a middle click, a PDF dropped on it) opens the
+PDF when it is a PDF's path, and is dropped otherwise.
+
 Splitting a PDF's window (CTRL-W v, CTRL-W s) gives an empty window beside the
 page, to take notes in, rather than the page twice; `:vsplit notes.md` opens
 the file. `split_empty = false` keeps the page in both. The keys are set
