@@ -1102,9 +1102,28 @@ local function write_comment(ebuf)
   end)
 end
 
+-- delete_comment(ebuf): delete the comment ebuf edits (a new one is only
+-- dropped), and close ebuf.
+local function delete_comment(ebuf)
+  local e = editors[ebuf]
+  local function close()
+    if vim.api.nvim_buf_is_valid(ebuf) then
+      vim.api.nvim_buf_delete(ebuf, { force = true })
+    end
+  end
+  if not e.id then
+    forget(e.pdf)
+    return close()
+  end
+  change(e.file, { { ['do'] = 'delete', id = e.id } }, nil, function()
+    vim.notify('pdf.nvim: comment deleted')
+    close()
+  end)
+end
+
 -- edit(buf, c, add): edit comment c of buf's PDF ({ id, content, page }), or
 -- a new one (add: apply's add for it), in a buffer below the PDF, as text:
--- :w saves it into the PDF; :w with no text deletes it.
+-- :w saves it into the PDF, :d (or :w with no text) deletes it.
 local function edit(buf, c, add)
   local st = vim.b[buf].pdf
   for b, e in pairs(editors) do
@@ -1127,11 +1146,16 @@ local function edit(buf, c, add)
   bo.modified = false
   vim.api.nvim_create_autocmd('BufWriteCmd', { buffer = ebuf, callback = function() write_comment(ebuf) end })
   vim.api.nvim_create_autocmd('BufWipeout', { buffer = ebuf, callback = function() editors[ebuf] = nil end })
+  vim.api.nvim_buf_create_user_command(ebuf, 'PdfDelete', function() delete_comment(ebuf) end, {})
+  -- :d, Vim's delete, as its own whole command line: the comment
+  vim.keymap.set('ca', 'd', function()
+    return vim.fn.getcmdtype() == ':' and vim.fn.getcmdline() == 'd' and 'PdfDelete' or 'd'
+  end, { buffer = ebuf, expr = true })
   local height = math.max(3, math.min(M.config.editor_height, #lines + 1))
   local win = vim.api.nvim_open_win(ebuf, true, { split = 'below', win = buf_win(buf) or 0, height = height })
   local wo = vim.wo[win][0]
   wo.wrap, wo.linebreak = true, true
-  wo.winbar = string.format(' %s on page %d: :w saves it in the PDF, :q closes; :w with no text deletes it',
+  wo.winbar = string.format(' %s on page %d: :w saves it in the PDF, :d deletes it, :q closes',
     c and 'comment' or 'new comment', page)
   if c then
     forget(buf)

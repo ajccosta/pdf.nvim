@@ -95,7 +95,7 @@ that text, with the comment as its note. Without a selection `c` comments at
 the cursor. New comments get the colour |:PdfColor| chose.
 
 A comment is written in a buffer of its own below the PDF, as any text: `:w`
-saves it into the PDF, `:q` closes it, and `:w` with no text deletes it. A new
+saves it into the PDF, `:d` deletes it, and `:q` closes it. A new
 one starts in Insert mode. `c` with the cursor on a comment edits it there;
 so does a click on a note, or on a comment's text beside the page, and a
 double-click on a highlight (a single click on one moves the cursor and shows
