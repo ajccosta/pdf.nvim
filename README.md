@@ -82,6 +82,8 @@ require('pdf').setup({
   comments_width = 40, -- the comments list's window
   notes_width = 40,     -- columns beside the page for comments (0: none)
   notes_min_width = 12, -- zoomed in, less room than this: no comments' text
+  color = 'blue',       -- new comments' colour: a name in colors, or '#rrggbb'
+  colors = { blue = '#89b4fa' },  -- names for colours, added to the defaults
   position = { 'right', 'center' },  -- where a page smaller than the window sits
   keys = { next = { 'n' } },  -- per action, replaces its keys
 })
@@ -89,4 +91,6 @@ require('pdf').setup({
 
 `:PdfPosition {across} [{down}]` moves the page while reading: `left`, `center`
 or `right`, then `top`, `center` or `bottom`, or a fraction from 0 to 1
-(`:PdfPosition 0.25`). The choice is remembered across sessions.
+(`:PdfPosition 0.25`). `:PdfColor {name|#rrggbb}` picks new comments' colour
+(`yellow`, `orange`, `red`, `pink`, `purple`, `blue`, `teal`, `green`). Both
+choices are remembered across sessions.

@@ -23,6 +23,12 @@ M.config = {
   comments_width = 40, -- the comments list's window, in columns
   notes_width = 40, -- columns each side of the page for its comments; 0: none
   notes_min_width = 12, -- zoomed in, fewer than this left beside the page: none
+  -- new comments' colour: a name from colors or "#rrggbb"; see :PdfColor
+  color = 'blue',
+  colors = {
+    yellow = '#ffe873', orange = '#fab387', red = '#f38ba8', pink = '#f5c2e7',
+    purple = '#cba6f7', blue = '#89b4fa', teal = '#94e2d5', green = '#a6e3a1',
+  },
   keys = {
     next = { 'n', '<Space>', '<PageDown>' },
     prev = { 'p', '<BS>', '<PageUp>' },
@@ -63,7 +69,7 @@ end
 
 -- The settings a command changes, remembered across sessions: they win over
 -- setup's, which are the defaults until one is chosen.
-M.remembered = { 'position' }
+M.remembered = { 'position', 'color' }
 local state_file = vim.fn.stdpath('state') .. '/pdf.nvim.json'
 
 local function saved()
@@ -682,19 +688,28 @@ end
 -- too. A list buffer per PDF shows them to edit; :w saves it into the file.
 local lists = {} -- list buffer: { pdf = its PDF's buffer, file, shown = by id }
 
--- place(st, page): where a new comment on page goes, as apply's add takes it:
--- on the text selected on it, else at the spot clicked on it, else the top
--- left of what the window shows of it, else of the page.
-local function place(st, page)
+-- color(): the colour new comments get, as "#rrggbb".
+local function color()
+  local c = M.config.color
+  return M.config.colors[c] or c
+end
+
+-- new_comment(st, page, content): apply's add for a comment on page, in the
+-- colour chosen: on the text selected on it, else at the spot clicked on it,
+-- else the top left of what the window shows of it, else of the page.
+local function new_comment(st, page, content)
   local s, p = st.select, st.point
+  local at
   if s and s.page == page then
-    return { x = s.a.x, y = s.a.y, select = { a = s.a, b = s.b } }
+    at = { x = s.a.x, y = s.a.y, select = { a = s.a, b = s.b } }
   elseif p and p.page == page then
-    return { x = p.x, y = p.y }
+    at = { x = p.x, y = p.y }
   elseif page == st.page then
-    return { x = st.x + 10, y = st.y + 10 }
+    at = { x = st.x + 10, y = st.y + 10 }
+  else
+    at = { x = 20, y = 20 }
   end
-  return { x = 20, y = 20 }
+  return vim.tbl_extend('force', at, { ['do'] = 'add', page = page, content = content, color = color() })
 end
 
 -- forget(buf): let go of the spot and text marked in buf's PDF.
@@ -795,7 +810,7 @@ local function save(lbuf)
   local changes, seen = {}, {}
   local function add(e)
     local page = e.page or st.page or 0
-    changes[#changes + 1] = vim.tbl_extend('force', place(st, page), { ['do'] = 'add', page = page, content = e.content })
+    changes[#changes + 1] = new_comment(st, page, e.content)
   end
   for _, e in ipairs(entries(vim.api.nvim_buf_get_lines(lbuf, 0, -1, false))) do
     local old = e.id and not seen[e.id] and l.shown[e.id]
@@ -888,7 +903,7 @@ function M.comment()
     if not t or vim.trim(t) == '' then
       return
     end
-    local add = vim.tbl_extend('force', place(st, st.page), { ['do'] = 'add', page = st.page, content = t })
+    local add = new_comment(st, st.page, t)
     forget(buf)
     change(st.file, { add })
   end)
@@ -1105,6 +1120,19 @@ function M.position(across, down)
   end
   remember('position', { across, down or M.config.position[2] })
   M.redraw(true)
+end
+
+-- set_color(c): the colour new comments get, as config.color takes it; nil
+-- shows it.
+function M.set_color(c)
+  if not c then
+    return vim.notify(string.format('pdf.nvim: new comments are %s (:help :PdfColor)', M.config.color))
+  end
+  if not M.config.colors[c] and not c:match('^#%x%x%x%x%x%x$') then
+    return vim.notify('pdf.nvim: :PdfColor {' .. table.concat(vim.tbl_keys(M.config.colors), '|')
+      .. '|#rrggbb} (:help :PdfColor)', vim.log.levels.ERROR)
+  end
+  remember('color', c)
 end
 
 function M.setup(opts)

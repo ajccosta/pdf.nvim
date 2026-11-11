@@ -63,7 +63,8 @@ see all of it in the message line. The text's colour is `PdfNote`.
 Drag over text to select it (it shows inverted, and the message line has
 it), then `c` comments on it: the comment is saved as a highlight of that text,
 with the comment as its note. A click without a drag marks a spot instead;
-a click on a comment shows its text.
+a click on a comment shows its text. New comments get the colour
+|:PdfColor| chose.
 
 Skim draws comments from other programs but shows their text only once they
 are its own: File > Convert Notes. That moves them out of the PDF into Skim's
@@ -110,6 +111,17 @@ hints. <CR> on a comment shows it in the PDF's window.
 
 :PdfPosition            Shows where pages sit now.
 
+                                                                *:PdfColor*
+:PdfColor {color}       The colour new comments get: a name from `colors` in
+                        |pdf.nvim-setup| (`yellow`, `orange`, `red`, `pink`,
+                        `purple`, `blue`, `teal`, `green`) or `#rrggbb`. >
+                          :PdfColor green
+                          :PdfColor #ff8800
+<
+                        Remembered across sessions, as |:PdfPosition| is.
+
+:PdfColor               Shows the colour new comments get.
+
                                                                 *:PdfComments*
 :PdfComments            Opens or closes the PDF's comments list, as `C` does
                         (|pdf.nvim-comments|).
@@ -134,6 +146,8 @@ hints. <CR> on a comment shows it in the PDF's window.
     notes_width = 40,     -- columns beside the page (each side) for its
                           -- comments' text; 0: none
     notes_min_width = 12, -- zoomed in, less room than this: no text
+    color = 'blue',       -- new comments' colour; see :PdfColor
+    colors = { blue = '#89b4fa' },  -- names for colours, added to these
     keys = { next = { 'n' } },  -- per action, replaces its keys
     list_keys = { jump = { '<CR>' } },  -- in the comments list
   })

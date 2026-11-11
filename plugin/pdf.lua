@@ -66,6 +66,17 @@ end, {
     return n <= 1 and { 'left', 'center', 'right' } or { 'top', 'center', 'bottom' }
   end,
 })
+-- :PdfColor {name|#rrggbb}: the colour new comments get
+vim.api.nvim_create_user_command('PdfColor', function(o)
+  require('pdf').set_color(o.fargs[1])
+end, {
+  nargs = '?',
+  complete = function()
+    local names = vim.tbl_keys(require('pdf').config.colors)
+    table.sort(names)
+    return names
+  end,
+})
 -- :PdfComments: open or close the PDF's comments list
 vim.api.nvim_create_user_command('PdfComments', function()
   require('pdf').comments()

@@ -32,8 +32,9 @@
 # at: {"file", "page", "x", "y"}: {"comment": the one there, as comments has
 # it, or null}.
 #
-# apply: {"file", "changes"}, each {"do": "add", "page", "x", "y", "content"}
-# (with "select" as render takes it, a highlight of that text, else a note),
+# apply: {"file", "changes"}, each {"do": "add", "page", "x", "y", "content",
+# "color": "#rrggbb" (optional)} (with "select" as render takes it, a
+# highlight of that text, else a note),
 # {"do": "set", "id", "content"} or {"do": "delete", "id"}: saves them into
 # the PDF, then replies as comments does.
 import getpass
@@ -274,6 +275,8 @@ def change(doc, changes):
                 at = fitz.Point(x, y) * p.derotation_matrix
                 a = p.add_text_annot(at, c["content"], icon="Comment")
             a.set_info(content=c["content"], title=getpass.getuser())
+            if c.get("color"):
+                a.set_colors(stroke=[int(c["color"][i:i + 2], 16) / 255 for i in (1, 3, 5)])
             a.update()
             # its own name: PyMuPDF's start again with each opening
             doc.xref_set_key(a.xref, "NM", fitz.get_pdf_str(str(uuid.uuid4())))
