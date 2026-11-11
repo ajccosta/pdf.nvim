@@ -21,7 +21,8 @@ M.config = {
   -- where the page sits when it is smaller than the window: across (left,
   -- center, right) and down (top, center, bottom), or a fraction from 0 to 1
   position = { 'right', 'center' },
-  scroll = 0.2, -- a scroll key moves this much of the window
+  scroll = 0.1, -- a scroll key (CTRL-E, CTRL-Y) moves this much of the window
+  half = 0.5, -- and CTRL-D, CTRL-U this much
   wheel = 0.05, -- and a wheel tick this much
   zoom = 1.25, -- a zoom in or out multiplies by this
   comments_width = 40, -- the comments list's window, in columns
@@ -36,20 +37,38 @@ M.config = {
   keys = {
     next = { 'n', '<Space>', '<PageDown>' },
     prev = { 'p', '<BS>', '<PageUp>' },
-    first = { 'gg', '<Home>' },
-    last = { 'G', '<End>' },
-    down = { 'j', '<Down>' },
-    up = { 'k', '<Up>' },
+    -- the text cursor's motions, as in Vim; see M.motions
     left = { 'h', '<Left>' },
     right = { 'l', '<Right>' },
+    down = { 'j', '<Down>' },
+    up = { 'k', '<Up>' },
+    word = { 'w' },
+    word_end = { 'e' },
+    word_back = { 'b' },
+    line_start = { '0', '<Home>' },
+    line_text = { '^' },
+    line_end = { '$', '<End>' },
+    paragraph_next = { '}' },
+    paragraph_prev = { '{' },
+    first = { 'gg' },
+    last = { 'G' },
+    visual = { 'v' },
+    visual_lines = { 'V' },
+    yank = { 'y' },
+    scroll_down = { '<C-e>' },
+    scroll_up = { '<C-y>' },
+    half_down = { '<C-d>' },
+    half_up = { '<C-u>' },
+    scroll_left = { 'zh' },
+    scroll_right = { 'zl' },
     wheel_down = { '<ScrollWheelDown>' },
     wheel_up = { '<ScrollWheelUp>' },
     wheel_left = { '<ScrollWheelLeft>' },
     wheel_right = { '<ScrollWheelRight>' },
     zoom_in = { '+', '=' },
     zoom_out = { '-' },
-    fit = { '0' },
-    fit_width = { 'w' },
+    fit = { 'zp' },
+    fit_width = { 'zw' },
     point = { '<LeftMouse>' },
     drag = { '<LeftDrag>' },
     release = { '<LeftRelease>' },
@@ -256,15 +275,19 @@ local function request(req, cb)
   end
 end
 
--- op(req, cb): one of the renderer's other ops (comments, apply); each its
--- own, none dropped for a later one.
+-- op(req, cb, always): one of the renderer's other ops (comments, apply);
+-- each its own, none dropped for a later one. cb has the reply; on an error,
+-- only with always.
 local ops = 0
-local function op(req, cb)
+local function op(req, cb, always)
   ops = ops + 1
   req.id = 'op' .. ops
   send_request(req, function(r)
     if r.error then
-      return vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
+      vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
+      if not always then
+        return
+      end
     end
     cb(r)
   end)
@@ -286,7 +309,7 @@ end
 local function status(st)
   if st.selected then
     local t = vim.fn.strcharpart(st.selected, 0, 50)
-    return vim.api.nvim_echo({ { string.format('selected "%s%s": c comments on it, <Esc> lets go', t,
+    return vim.api.nvim_echo({ { string.format('selected "%s%s": c comments on it, y copies it, <Esc> lets go', t,
       t == st.selected and '' or '…') } }, false, {})
   end
   local zoom = math.abs(st.zoom - 1) < 0.01 and '' or string.format('  %d%%', st.zoom * 100)
@@ -301,10 +324,11 @@ end
 -- offset in pixels (py), where its scroll is going (target), and its cells.
 local shown = {}
 
--- selected(st): the text selected, as render takes it.
+-- selected(st): the text selected, as render takes it: from where v (or V,
+-- whole lines) started to the cursor.
 local function selected(st)
-  local s = st.select
-  return s and { page = s.page, a = s.a, b = s.b } or nil
+  local v, c = st.visual, st.cursor
+  return v and c and { page = v.page, a = { x = v.x, y = v.y }, b = { x = c.x, y = c.y }, lines = v.lines } or nil
 end
 
 -- continuous(st): whether st's pages show stacked, one on from the other.
@@ -567,6 +591,7 @@ local function draw(win, clear, scale)
   request(vim.tbl_extend('force', {
     id = win, file = st.file, page = st.page, zoom = st.zoom,
     x = st.x, y = st.y, out = png, width = cols * cpx, height = rows * rpx, select = selected(st),
+    cursor = st.cursor,
     links = links and vim.tbl_extend('force', links, { row = rpx }),
   }, stack), function(r)
     if r.error then
@@ -604,6 +629,7 @@ local function draw(win, clear, scale)
     shown[win] = {
       file = st.file, page = r.page, scale = r.scale, px = r.px, py = r.py, pxh = r.pxh, tops = r.tops,
       iw = r.iw, rows = rows, cpx = cpx, rpx = rpx, box = box, png = png, select = selected(st),
+      cursor = st.cursor,
       margin = notes_cols, pages = {}, stack = stack,
       links = links and vim.tbl_extend('force', links, { row = rpx }),
       -- only a sharp frame filling the height of a window as wide as the
@@ -691,7 +717,8 @@ local function pump(win)
   local h = math.abs(d) * sh.rpx
   request(vim.tbl_extend('force', {
     id = win, file = sh.file, page = sh.page, scale = sh.scale,
-    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png, select = sh.select, links = sh.links,
+    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png, select = sh.select, cursor = sh.cursor,
+    links = sh.links,
   }, sh.stack), function(r)
     if shown[win] ~= sh then
       return
@@ -806,13 +833,13 @@ local function color()
 end
 
 -- new_comment(st, page, content): apply's add for a comment on page, in the
--- colour chosen: on the text selected on it, else at the spot clicked on it,
+-- colour chosen: on the text selected on it, else at the cursor on it,
 -- else the top left of what the window shows of it, else of the page.
 local function new_comment(st, page, content)
-  local s, p = st.select, st.point
+  local s, p = selected(st), st.cursor
   local at
   if s and s.page == page then
-    at = { x = s.a.x, y = s.a.y, select = { a = s.a, b = s.b } }
+    at = { x = s.a.x, y = s.a.y, select = { a = s.a, b = s.b, lines = s.lines } }
   elseif p and p.page == page then
     at = { x = p.x, y = p.y }
   elseif page == st.page then
@@ -823,12 +850,12 @@ local function new_comment(st, page, content)
   return vim.tbl_extend('force', at, { ['do'] = 'add', page = page, content = content, color = color() })
 end
 
--- forget(buf): let go of the spot and text marked in buf's PDF.
+-- forget(buf): let go of the text selected in buf's PDF.
 local function forget(buf)
   local st = vim.b[buf].pdf
-  if st and (st.point or st.select) then
-    local drawn = st.select
-    st.point, st.select, st.selected = nil, nil, nil
+  if st and (st.visual or st.selected) then
+    local drawn = st.visual
+    st.visual, st.selected = nil, nil
     vim.b[buf].pdf = st
     if drawn then
       M.redraw()
@@ -1003,7 +1030,7 @@ function M.comments()
 end
 
 -- comment(): add a comment on the page shown: on the text selected, at the
--- spot clicked, or at the top left of what shows.
+-- cursor, or at the top left of what shows.
 function M.comment()
   local buf = vim.api.nvim_get_current_buf()
   local st = vim.b.pdf
@@ -1040,7 +1067,7 @@ end
 
 -- show_comment(c): c's text in the message line, or what a click is for.
 local function show_comment(c)
-  local msg = c and table.concat(text(c.content), ' / ') or 'spot marked: c comments there, a drag selects text'
+  local msg = c and table.concat(text(c.content), ' / ') or 'c comments here, a drag or v selects text'
   local room = vim.v.echospace - 12
   if vim.fn.strdisplaywidth(msg) > room then
     msg = vim.fn.strcharpart(msg, 0, room - 1) .. '…'
@@ -1048,21 +1075,22 @@ local function show_comment(c)
   vim.api.nvim_echo({ { c and 'comment: ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } }, false, {})
 end
 
--- point(m): a click: mark the spot, for the next comment, and where a drag
--- selecting text starts; on a comment's text beside the page, show it.
+-- point(m): a click: the cursor goes there, where a drag selecting text
+-- starts; on a comment, or its text beside the page, show it.
 function M.point(m)
-  forget(vim.api.nvim_get_current_buf())
+  local buf = vim.api.nvim_get_current_buf()
+  forget(buf)
   local p = at(m)
+  local st = vim.b.pdf
   if not p then
     local sh = shown[m.winid]
     local side = sh and m.screencol < sh.box.col and 'left' or 'right'
     local c = sh and sh.noted and sh.noted[side][m.winrow - 1]
     return c and show_comment(c)
   end
-  local st = vim.b.pdf
-  st.point = p
+  st.cursor, st.want = p, nil
   vim.b.pdf = st
-  -- on a comment, its text; else what the spot is for
+  M.redraw()
   op({ op = 'at', file = st.file, page = p.page, x = p.x, y = p.y }, function(r)
     show_comment(r.comment)
   end)
@@ -1071,11 +1099,132 @@ end
 -- drag(m): select the text from the spot clicked to the mouse.
 function M.drag(m)
   local st, p = vim.b.pdf, at(m, true)
-  if st.point and p and p.page == st.point.page then
-    st.select = { page = p.page, a = st.point, b = p }
+  local from = st.visual or st.cursor
+  if from and p and p.page == from.page then
+    st.visual, st.cursor = st.visual or { page = from.page, x = from.x, y = from.y }, p
     vim.b.pdf = st
     M.redraw()
   end
+end
+
+-- The text cursor's motions, by their keys' action: Vim's, which the
+-- renderer's move makes over the page's text.
+M.motions = {
+  left = 'h', right = 'l', down = 'j', up = 'k', word = 'w', word_end = 'e', word_back = 'b',
+  line_start = '0', line_text = '^', line_end = '$', paragraph_next = '}', paragraph_prev = '{',
+  first = 'gg', last = 'G',
+}
+
+-- in_view(win, c): whether the window shows c, a spot on its pages.
+local function in_view(win, c)
+  local sh = shown[win]
+  if not (sh and c) then
+    return c ~= nil
+  end
+  if not sh.tops and c.page ~= sh.page then
+    return false
+  end
+  local y = (sh.tops and sh.tops[c.page + 1] or 0) + c.y * sh.scale
+  local x = c.x * sh.scale
+  local top = sh.target or sh.py
+  return y >= top and y < top + sh.rows * sh.rpx and x >= sh.px and x < sh.px + sh.iw
+end
+
+-- follow(win, st, r): scroll st so the window shows r, the cursor's box (as
+-- move replies), a tenth of the window in from its edge when it moves.
+local function follow(win, st, r)
+  local sh = shown[win]
+  if not sh then
+    return
+  end
+  local s = sh.scale
+  local vh, vw = sh.rows * sh.rpx / s, sh.iw / s
+  local top = (sh.target or sh.py) / s
+  local off = sh.tops and (sh.tops[r.page + 1] or 0) / s or 0
+  local away = (not sh.tops and r.page ~= sh.page) and (r.page < sh.page and -1 or 1)
+    or (off + r.y0 < top and -1) or (off + r.y1 > top + vh and 1)
+  if away then
+    st.page, st.y = r.page, away < 0 and r.y0 - vh / 10 or r.y1 - vh * 9 / 10
+  end
+  local left = sh.px / s
+  if r.x0 < left or r.x1 > left + vw then
+    st.x = math.max(0, r.x0 < left and r.x0 - vw / 10 or r.x1 - vw * 9 / 10)
+  end
+end
+
+local moving = {} -- buffer: the motions waiting for the one out
+
+-- move(motion): move the current PDF's cursor as Vim's motion (M.motions)
+-- moves it; from the top left of what shows when the cursor is not on it.
+-- In v, on the page it started on.
+function M.move(motion, count)
+  local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+  local q = moving[buf]
+  if q then
+    return table.insert(q, { motion, count })
+  end
+  local st = vim.b.pdf
+  local from = st.cursor
+  if not in_view(win, from) then
+    from = { page = st.page, x = st.x, y = st.y }
+    motion = motion:match('^[hljkwbe0^$]$') and 'here' or motion
+  end
+  moving[buf] = {}
+  op({
+    op = 'move', file = st.file, page = from.page, x = from.x, y = from.y, motion = motion, count = count,
+    want = st.cursor == from and st.want or nil, stay = st.visual and true or nil,
+  }, function(r)
+    local queued = moving[buf] or {}
+    moving[buf] = nil
+    if r.error or not vim.api.nvim_buf_is_valid(buf) or r.page == nil then
+      return
+    end
+    local now = vim.b[buf].pdf
+    now.cursor, now.want = { page = r.page, x = r.x, y = r.y }, r.want
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
+      follow(win, now, r)
+    end
+    vim.b[buf].pdf = now
+    if #queued > 0 then
+      vim.api.nvim_buf_call(buf, function()
+        M.move(unpack(queued[1]))
+        for i = 2, #queued do
+          table.insert(moving[buf], queued[i])
+        end
+      end)
+    else
+      M.redraw()
+    end
+  end, true)
+end
+
+-- visual(lines): start selecting text from the cursor (whole lines with
+-- lines), as v and V; again, stop.
+function M.visual(lines)
+  local buf = vim.api.nvim_get_current_buf()
+  local st = vim.b.pdf
+  if st.visual and (st.visual.lines or false) == lines then
+    return forget(buf)
+  end
+  if not st.cursor then
+    return M.move('here')
+  end
+  -- v in V, or V in v: the other way, from where it started
+  local from = st.visual or st.cursor
+  st.visual = { page = from.page, x = from.x, y = from.y, lines = lines or nil }
+  vim.b.pdf = st
+  M.redraw()
+end
+
+-- yank(): copy the text selected into the register (as y: "+y the clipboard).
+function M.yank()
+  local st = vim.b.pdf
+  if not (selected(st) and st.selected) then
+    return vim.notify('pdf.nvim: no text selected (v selects)')
+  end
+  vim.fn.setreg(vim.v.register, st.selected)
+  vim.api.nvim_echo({ { string.format('copied "%s"', vim.fn.strcharpart(st.selected, 0, 50)) } }, false, {})
+  forget(vim.api.nvim_get_current_buf())
 end
 
 local function scroller(dx, dy, step)
@@ -1088,12 +1237,15 @@ end
 local actions = {
   next = function() M.go(vim.b.pdf.page + 1 + vim.v.count1) end,
   prev = function() M.go(vim.b.pdf.page + 1 - vim.v.count1) end,
-  first = function() M.go(1) end,
-  last = function() M.go(vim.b.pdf.count or 1) end,
-  down = scroller(0, 1, 'scroll'),
-  up = scroller(0, -1, 'scroll'),
-  left = scroller(-1, 0, 'scroll'),
-  right = scroller(1, 0, 'scroll'),
+  visual = function() M.visual(false) end,
+  visual_lines = function() M.visual(true) end,
+  yank = function() M.yank() end,
+  scroll_down = scroller(0, 1, 'scroll'),
+  scroll_up = scroller(0, -1, 'scroll'),
+  half_down = scroller(0, 1, 'half'),
+  half_up = scroller(0, -1, 'half'),
+  scroll_left = scroller(-1, 0, 'scroll'),
+  scroll_right = scroller(1, 0, 'scroll'),
   wheel_down = scroller(0, 1, 'wheel'),
   wheel_up = scroller(0, -1, 'wheel'),
   wheel_left = scroller(-1, 0, 'wheel'),
@@ -1110,6 +1262,10 @@ local actions = {
   comments = function() M.comments() end,
   margin = function() M.margin() end,
 }
+
+for action, motion in pairs(M.motions) do
+  actions[action] = function() M.move(motion, vim.v.count) end
+end
 
 -- The options a PDF's window has, so all its columns are the page's.
 M.pdf_window = {
@@ -1189,6 +1345,19 @@ local function map_mouse()
   end
 end
 
+-- hide_cursor(hide): hide nvim's own cursor (in Normal and Visual mode), the
+-- page's text cursor being the one that counts over a PDF; or show it again.
+local guicursor
+function M.hide_cursor(hide)
+  if hide and not guicursor then
+    vim.api.nvim_set_hl(0, 'PdfHiddenCursor', { blend = 100, bg = '#000000', default = true })
+    guicursor = vim.o.guicursor
+    vim.o.guicursor = guicursor .. ',n-v:PdfHiddenCursor'
+  elseif not hide and guicursor then
+    vim.o.guicursor, guicursor = guicursor, nil
+  end
+end
+
 -- open(buf): what replaces reading a .pdf into buf.
 function M.open(buf)
   local file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ':p')
@@ -1207,7 +1376,18 @@ function M.open(buf)
   for action, keys in pairs(M.config.keys) do
     if not M.mouse_actions[action] then
       for _, key in ipairs(keys) do
-        vim.keymap.set('n', key, actions[action], { buffer = buf, nowait = true })
+        if key:match('^%d$') then
+          -- a digit after a count is the count's (10j), as in Vim
+          vim.keymap.set('n', key, function()
+            if vim.v.count > 0 then
+              return key
+            end
+            vim.schedule(actions[action])
+            return ''
+          end, { buffer = buf, nowait = true, expr = true })
+        else
+          vim.keymap.set('n', key, actions[action], { buffer = buf, nowait = true })
+        end
       end
     end
   end
@@ -1222,6 +1402,9 @@ function M.open(buf)
     buffer = buf,
     callback = function() M.keep_view(buf) end,
   })
+  vim.api.nvim_create_autocmd('BufEnter', { buffer = buf, callback = function() M.hide_cursor(true) end })
+  vim.api.nvim_create_autocmd('BufLeave', { buffer = buf, callback = function() M.hide_cursor(false) end })
+  M.hide_cursor(true)
   M.window_options(true)
   M.redraw(true)
 end

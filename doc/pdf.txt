@@ -14,25 +14,39 @@ inline image protocol. Needs Neovim 0.12+, iTerm2 and a `python3` with PyMuPDF
 
 In a PDF's window:
 
-  `j` `k` <Down> <Up>, wheel      scroll down / up, on into the next or
+  `h` `j` `k` `l`, arrows         move the cursor over the page's text: a
+                                character, a line (on into the next page)
+  `w` `b` `e`                       to the next word, back one, to its end
+  `0` `^` `$` <Home> <End>          to the line's start, its text, its end
+  `{` `}`                           to the paragraph's start, the next one's
+  `gg` `G`                          first / last page; `{count}G` page {count}
+  `v` `V`                           select from the cursor (`V`: whole lines);
+                                again, or <Esc>, lets go
+  `y`                             copy the text selected into the register
+                                (`"+y`: the clipboard)
+  CTRL-E CTRL-Y, wheel          scroll down / up, on into the next or
                                 previous page (see `continuous`)
-  `h` `l` <Left> <Right>          scroll left / right
+  CTRL-D CTRL-U                 scroll half a window down / up
+  `zh` `zl`                         scroll left / right
   `n` `p` <Space> <BS>            next / previous page
   <PageDown> <PageUp>
-  `gg` `G` <Home> <End>           first / last page
   `+` `=` `-`                       zoom in / out
-  `w`                             fit the page's width (what a PDF opens with)
-  `0`                             fit the whole page
-  click                         on a comment: show its text; elsewhere: mark
-                                a spot for the next comment
+  `zw`                            fit the page's width (what a PDF opens with)
+  `zp`                            fit the whole page
+  click                         move the cursor there; on a comment, or its
+                                text beside the page, show it
   drag                          select the text from there to the mouse
   `c`                             comment on the text selected, else at the
-                                spot marked, else the top left of what shows
-  <Esc>                         let go of the spot and the selection
+                                cursor, else the top left of what shows
+  <Esc>                         let go of the selection
   `C`                             open or close the comments list
   `m`                             hide or show the comments beside the page
 
-A count works: `3n` is three pages on, `2+` zooms in twice.
+The cursor is a block over a character of the page, as Vim's is over text,
+and nvim's own is hidden over a PDF. The page scrolls to keep it in view;
+after a scroll that leaves it out of view, a motion starts from the top left
+of what shows. Selecting stays on the page it started on. A count works:
+`3w` is three words on, `3n` three pages, `2+` zooms in twice.
 
 The wheel scrolls the window under the mouse: the page when over it, from any
 window, and the other windows as usual. The rest of the keys act in the PDF's
@@ -66,11 +80,12 @@ still scrolls by rows.
 A PDF without comments keeps all of the window. Click a comment's text to
 see all of it in the message line. The text's colour is `PdfNote`.
 
-Drag over text to select it (it shows inverted, and the message line has
-it), then `c` comments on it: the comment is saved as a highlight of that text,
-with the comment as its note. A click without a drag marks a spot instead;
-a click on a comment shows its text. New comments get the colour
+Select text (`v` and a motion, or a drag; it shows inverted, and the message
+line has it), then `c` comments on it: the comment is saved as a highlight of
+that text, with the comment as its note. Without a selection `c` comments at
+the cursor; a click on a comment shows its text. New comments get the colour
 |:PdfColor| chose.
+
 
 Skim draws comments from other programs but shows their text only once they
 are its own: File > Convert Notes. That moves them out of the PDF into Skim's
@@ -149,7 +164,8 @@ hints. <CR> on a comment shows it in the PDF's window.
                           -- one page at a time
     gap = 1,              -- rows between stacked pages
     position = { 'right', 'center' },  -- see :PdfPosition
-    scroll = 0.2,         -- a scroll key moves a fifth of the window
+    scroll = 0.1,         -- CTRL-E and CTRL-Y move a tenth of the window
+    half = 0.5,           -- CTRL-D and CTRL-U half of it
     wheel = 0.05,         -- a wheel tick a twentieth (at least a row)
     zoom = 1.25,          -- each zoom step
     comments_width = 40,  -- the comments list's window
@@ -162,9 +178,12 @@ hints. <CR> on a comment shows it in the PDF's window.
     list_keys = { jump = { '<CR>' } },  -- in the comments list
   })
 <
-The actions in `keys`: `next`, `prev`, `first`, `last`, `down`, `up`, `left`,
-`right`, `wheel_down`, `wheel_up`, `wheel_left`, `wheel_right`, `zoom_in`,
-`zoom_out`, `fit`, `fit_width`, `point` (the click), `drag`, `release`,
-`clear`, `comment`, `comments`, `margin`.
+The actions in `keys`: `next`, `prev`; the motions `left`, `right`, `down`,
+`up`, `word`, `word_end`, `word_back`, `line_start`, `line_text`, `line_end`,
+`paragraph_next`, `paragraph_prev`, `first`, `last`; `visual`,
+`visual_lines`, `yank`, `scroll_down`, `scroll_up`, `half_down`, `half_up`,
+`scroll_left`, `scroll_right`, `wheel_down`, `wheel_up`, `wheel_left`,
+`wheel_right`, `zoom_in`, `zoom_out`, `fit`, `fit_width`, `point` (the
+click), `drag`, `release`, `clear`, `comment`, `comments`, `margin`.
 
  vim:tw=78:ts=8:ft=help:norl:

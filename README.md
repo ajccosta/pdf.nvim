@@ -27,21 +27,28 @@ Plug 'ajccosta/pdf.nvim'
 
 | Keys                                | Does                                    |
 |-------------------------------------|-----------------------------------------|
-| `j` `k` Down Up, wheel              | scroll down / up, on into the next page |
-| `h` `l` Left Right, sideways wheel  | scroll left / right                     |
+| `h` `j` `k` `l` arrows              | move the cursor over the page's text    |
+| `w` `b` `e` `0` `^` `$` `{` `}`     | and the rest of Vim's motions           |
+| `gg` `G`                            | first / last page (`3G`: page 3)        |
+| `v` `V`, or a drag                  | select text (`V`: whole lines)          |
+| `y`                                 | copy the text selected (`"+y`: clipboard) |
+| CTRL-E CTRL-Y, wheel                | scroll down / up, on into the next page |
+| CTRL-D CTRL-U                       | scroll half a window                    |
+| `zh` `zl`, sideways wheel           | scroll left / right                     |
 | `n` `p` Space BS PageDown PageUp    | next / previous page                    |
-| `gg` `G` Home End                   | first / last page                       |
 | `+` `=` `-`                         | zoom in / out                           |
-| `w`                                 | fit the page's width                    |
-| `0`                                 | fit the whole page                      |
+| `zw`                                | fit the page's width                    |
+| `zp`                                | fit the whole page                      |
+| click                               | move the cursor there                   |
 | click a comment                     | show its text                           |
-| click, then `c`                     | comment on that spot                    |
-| drag, then `c`                      | comment on the text selected            |
+| `c`                                 | comment on the text selected or at the cursor |
 | `Esc`                               | let go of the selection                 |
 | `C`                                 | the comments list, beside the page      |
 | `m`                                 | hide or show the comments beside it     |
 
-A count works: `3n` is three pages on, `2+` zooms in twice.
+The cursor is a block over a character of the page, as in Vim; the page
+scrolls to keep it in view. A count works: `3w` is three words on, `3n` three
+pages, `2+` zooms in twice.
 
 The wheel scrolls whichever window is under the mouse. `CTRL-W v` on the PDF
 gives an empty window beside it for notes.
@@ -49,9 +56,9 @@ gives an empty window beside it for notes.
 ## Comments
 
 Comments are the PDF's own notes (annotations), saved in the file, so Preview,
-Skim and Acrobat show them too, and they show here on the page. Click a spot
-and press `c` to add one, or drag over text first to comment on it: it shows
-selected while you type, and is saved highlighted. Each comment's text shows
+Skim and Acrobat show them too, and they show here on the page. Press `c` to
+add one at the cursor, or select text first (`v`, or a drag) to comment on it:
+it shows selected while you type, and is saved highlighted. Each comment's text shows
 beside the page, as text in the window, on the row of what it is on and
 joined to it by a line, on whichever side it fits best, in the room the page leaves (zoomed in,
 it may leave none; fitting the width, the page stays taller than the window); `m` hides or shows them. Click a comment, or its
@@ -80,7 +87,8 @@ require('pdf').setup({
   smooth = true,       -- scroll by rows, drawing only the new ones
   continuous = true,   -- zoomed in: scroll on from page to page, no jump
   gap = 1,             -- rows between pages scrolled through
-  scroll = 0.2,        -- a scroll key moves a fifth of the window
+  scroll = 0.1,        -- CTRL-E and CTRL-Y move a tenth of the window
+  half = 0.5,          -- CTRL-D and CTRL-U half of it
   wheel = 0.05,        -- a wheel tick a twentieth (at least a row)
   zoom = 1.25,         -- each zoom step
   comments_width = 40, -- the comments list's window
