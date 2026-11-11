@@ -43,8 +43,8 @@ In a PDF's window:
   double-click                  on a highlight, edit its comment
   drag                          select the text from there to the mouse
   `c`                             comment on the text selected; else, on a
-                                comment, edit it; else comment at the cursor,
-                                else at the top left of what shows; in a
+                                comment, edit it; else comment at the cursor
+                                (at the top of what shows once scrolled away); in a
                                 buffer below the page, see |pdf.nvim-comments|
   `x`                             delete the comment under the cursor
   <Esc>                         let go of the selection
@@ -53,8 +53,8 @@ In a PDF's window:
 
 The cursor is a block over a character of the page, as Vim's is over text,
 and nvim's own is hidden over a PDF. The page scrolls to keep it in view;
-after a scroll that leaves it out of view, a motion starts from the top left
-of what shows. Selecting stays on the page it started on. A count works:
+after a scroll that leaves it out of view, a motion or `c` starts from the
+top left of what shows. Selecting stays on the page it started on. A count works:
 `3w` is three words on, `3n` three pages, `2+` zooms in twice.
 
 The wheel scrolls the window under the mouse: the page when over it, from any
@@ -95,7 +95,7 @@ that text, with the comment as its note. Without a selection `c` comments at
 the cursor. New comments get the colour |:PdfColor| chose.
 
 A comment is written in a buffer of its own below the PDF, as any text: `:w`
-saves it into the PDF, `:q` closes it, and written empty it is deleted. A new
+saves it into the PDF, `:q` closes it, and `:w` with no text deletes it. A new
 one starts in Insert mode. `c` with the cursor on a comment edits it there;
 so does a click on a note, or on a comment's text beside the page, and a
 double-click on a highlight (a single click on one moves the cursor and shows

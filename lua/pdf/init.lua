@@ -1104,7 +1104,7 @@ end
 
 -- edit(buf, c, add): edit comment c of buf's PDF ({ id, content, page }), or
 -- a new one (add: apply's add for it), in a buffer below the PDF, as text:
--- :w saves it into the PDF, empty deletes it.
+-- :w saves it into the PDF; :w with no text deletes it.
 local function edit(buf, c, add)
   local st = vim.b[buf].pdf
   for b, e in pairs(editors) do
@@ -1131,7 +1131,7 @@ local function edit(buf, c, add)
   local win = vim.api.nvim_open_win(ebuf, true, { split = 'below', win = buf_win(buf) or 0, height = height })
   local wo = vim.wo[win][0]
   wo.wrap, wo.linebreak = true, true
-  wo.winbar = string.format(' %s on page %d: :w saves it in the PDF, :q closes; empty, :w deletes it',
+  wo.winbar = string.format(' %s on page %d: :w saves it in the PDF, :q closes; :w with no text deletes it',
     c and 'comment' or 'new comment', page)
   if c then
     forget(buf)
@@ -1144,20 +1144,6 @@ local function edit(buf, c, add)
         vim.cmd.startinsert()
       end
     end
-  end)
-end
-
--- comment(): on the text selected, a new comment; else edit the comment
--- under the cursor, or a new one at the cursor, or at the top left of what
--- shows.
-function M.comment()
-  local buf = vim.api.nvim_get_current_buf()
-  local st = vim.b.pdf
-  if selected(st) and st.selected then
-    return edit(buf, nil, new_comment(st, st.page, ''))
-  end
-  under(st, function(c)
-    edit(buf, c, not c and new_comment(st, st.page, '') or nil)
   end)
 end
 
@@ -1337,10 +1323,32 @@ local function screen_row(win, which)
   return { page = page, x = sh.px / sh.scale, y = y }
 end
 
+-- comment(moved): on the text selected, a new comment; else edit the
+-- comment under the cursor, or a new one at the cursor, on the cursor's page.
+-- A cursor scrolled away goes to the top of what shows first, as motions take
+-- it (moved: it has).
+function M.comment(moved)
+  local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+  local st = vim.b.pdf
+  local s = selected(st)
+  if s and st.selected then
+    return edit(buf, nil, new_comment(st, s.page, ''))
+  end
+  local from = not moved and not in_view(win, st.cursor) and screen_row(win, 'H')
+  if from then
+    return M.move('here', 1, { from = from, done = function() M.comment(true) end })
+  end
+  local page = st.cursor and st.cursor.page or st.page
+  under(st, function(c)
+    edit(buf, c, not c and new_comment(st, page, '') or nil)
+  end)
+end
+
 -- move(motion, count, o): move the current PDF's cursor as Vim's motion
 -- (M.motions) moves it; from the top left of what shows when the cursor is
 -- not on it. In v, on the page it started on. o: { char } for f F t T, with
--- again for ; and ,; { from } a spot to go to (here) instead.
+-- again for ; and ,; { from } a spot to go to (here) instead; { done } to
+-- call once it has moved.
 function M.move(motion, count, o)
   o = o or {}
   local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
@@ -1380,6 +1388,9 @@ function M.move(motion, count, o)
       follow(win, now, r)
     end
     vim.b[buf].pdf = now
+    if o.done and vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_call(win, o.done)
+    end
     if #queued > 0 then
       vim.api.nvim_buf_call(buf, function()
         M.move(unpack(queued[1]))
