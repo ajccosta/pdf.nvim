@@ -23,6 +23,16 @@ vim.api.nvim_create_autocmd('WinNew', {
     if vim.b.pdf and vim.w[prev].pdf_saved then
       vim.w.pdf_saved = vim.w[prev].pdf_saved
     end
+    -- a split of a PDF's window (CTRL-W v) is for something else beside it:
+    -- an empty buffer, unless the split was given a file (:vsplit notes.md)
+    local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+    if vim.b.pdf and require('pdf').config.split_empty then
+      vim.schedule(function()
+        if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
+          vim.api.nvim_win_call(win, function() vim.cmd.enew() end)
+        end
+      end)
+    end
   end,
 })
 -- a window resize or another window's text over the page

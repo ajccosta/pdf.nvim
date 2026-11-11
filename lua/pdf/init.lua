@@ -13,6 +13,7 @@ M.config = {
   -- drawing only the rows that come in: sharp all along, and little to send
   smooth = true,
   view = 'width', -- a PDF opens fitting its width; 1 fits the whole page
+  split_empty = true, -- a split of a PDF's window (CTRL-W v) starts empty
   -- where the page sits when it is smaller than the window: across (left,
   -- center, right) and down (top, center, bottom), or a fraction from 0 to 1
   position = { 'right', 'center' },
@@ -467,6 +468,35 @@ function M.window_options(pdf)
   end
 end
 
+-- The actions that act on the window under the mouse, not the current one:
+-- their keys are mapped everywhere, and do what they did before elsewhere.
+M.mouse_actions = { wheel_down = true, wheel_up = true, wheel_left = true, wheel_right = true }
+
+local mouse_mapped = false
+
+local function map_mouse()
+  if mouse_mapped then
+    return
+  end
+  mouse_mapped = true
+  for action in pairs(M.mouse_actions) do
+    for _, key in ipairs(M.config.keys[action] or {}) do
+      vim.keymap.set({ 'n', 'v', 'i' }, key, function()
+        local win = vim.fn.getmousepos().winid
+        if win == 0 or not vim.b[vim.api.nvim_win_get_buf(win)].pdf then
+          return key
+        end
+        vim.schedule(function()
+          if vim.api.nvim_win_is_valid(win) then
+            vim.api.nvim_win_call(win, actions[action])
+          end
+        end)
+        return ''
+      end, { expr = true, replace_keycodes = true, desc = 'pdf.nvim: ' .. action .. ' under the mouse' })
+    end
+  end
+end
+
 -- open(buf): what replaces reading a .pdf into buf.
 function M.open(buf)
   local file = vim.api.nvim_buf_get_name(buf)
@@ -476,13 +506,16 @@ function M.open(buf)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.fn['repeat']({ '' }, vim.o.lines))
   bo.modifiable, bo.modified, bo.filetype = false, false, 'pdf'
   for action, keys in pairs(M.config.keys) do
-    for _, key in ipairs(keys) do
-      vim.keymap.set('n', key, actions[action], { buffer = buf, nowait = true })
+    if not M.mouse_actions[action] then
+      for _, key in ipairs(keys) do
+        vim.keymap.set('n', key, actions[action], { buffer = buf, nowait = true })
+      end
     end
   end
+  map_mouse()
   -- the window's columns all for the page
   vim.api.nvim_create_autocmd('BufWinEnter', { buffer = buf, callback = function() M.window_options(true) end })
-  vim.api.nvim_create_autocmd({ 'BufWinEnter', 'WinScrolled', 'FocusGained', 'CmdlineLeave' }, {
+  vim.api.nvim_create_autocmd({ 'BufWinEnter', 'FocusGained', 'CmdlineLeave' }, {
     buffer = buf,
     callback = function() M.redraw(true) end,
   })

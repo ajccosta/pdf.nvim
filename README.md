@@ -35,6 +35,9 @@ Plug 'ajccosta/pdf.nvim'
 
 A count works: `3n` is three pages on, `2+` zooms in twice.
 
+The wheel scrolls whichever window is under the mouse. `CTRL-W v` on the PDF
+gives an empty window beside it for notes.
+
 ## Setup
 
 ```lua
