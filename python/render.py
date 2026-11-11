@@ -47,10 +47,12 @@
 # "color": "#rrggbb" (optional)} (with "select" as render takes it, a
 # highlight of that text, else a note),
 # {"do": "set", "id", "content"} or {"do": "delete", "id"}: saves them into
-# the PDF, then replies as comments does, with "added": the new ones' ids.
+# the PDF, with what other readers need to open each comment (see tidy),
+# then replies as comments does, with "added": the new ones' ids.
 import getpass
 import json
 import os
+import re
 import sys
 import uuid
 
@@ -523,9 +525,6 @@ def change(doc, changes):
             quads = c.get("select") and selection(file, os.stat(file).st_mtime, p, c["select"])[2]
             if quads:
                 a = p.add_highlight_annot(quads)
-                # where readers that open a note in a popup (Preview) show it
-                x = max(0, min(a.rect.x1, p.rect.x1 - 200))
-                a.set_popup(fitz.Rect(x, a.rect.y0, x + 200, a.rect.y0 + 100))
             else:
                 # x, y are where it shows; the note's point is on the unrotated page
                 # (kept on the page)
@@ -533,6 +532,7 @@ def change(doc, changes):
                 y = max(0, min(float(c["y"]), p.rect.height - 20))
                 at = fitz.Point(x, y) * p.derotation_matrix
                 a = p.add_text_annot(at, c["content"], icon="Comment")
+                a.set_popup(beside(p, a))
             a.set_info(content=c["content"], title=getpass.getuser())
             if c.get("color"):
                 a.set_colors(stroke=[int(c["color"][i:i + 2], 16) / 255 for i in (1, 3, 5)])
@@ -544,10 +544,60 @@ def change(doc, changes):
             _, a = find(doc, int(c["id"]))
             a.set_info(content=c["content"])
             a.update()
+            doc.xref_set_key(a.xref, "M", fitz.get_pdf_str(fitz.get_pdf_now()))
         elif c["do"] == "delete":
             p, a = find(doc, int(c["id"]))
             p.delete_annot(a)
     return added
+
+
+def refs(doc, xref, key):
+    """The objects an array key of xref points to."""
+    t, v = doc.xref_get_key(xref, key)
+    if t == "xref":
+        v = doc.xref_object(int(v.split()[0]))
+    return [int(x) for x in re.findall(r"(\d+) 0 R", v)] if t in ("array", "xref") else []
+
+
+def beside(p, a):
+    """Where a's popup opens: to its right, on the page."""
+    x = max(0, min(a.rect.x1, p.rect.width - 200))
+    y = max(0, min(a.rect.y0, p.rect.height - 100))
+    return fitz.Rect(x, y, x + 200, y + 100)
+
+
+def tidy(doc):
+    """Make each comment one every reader opens: linked to its page, with a
+    popup to read it in, and dates; drop popups whose comment is gone."""
+    now = fitz.get_pdf_str(fitz.get_pdf_now())
+    for p in doc:
+        annots = refs(doc, p.xref, "Annots")
+        keep = []
+        for x in annots:
+            t, parent = doc.xref_get_key(x, "Parent")
+            if doc.xref_get_key(x, "Subtype")[1] == "/Popup" and t == "xref":
+                parent = int(parent.split()[0])
+                if parent not in annots:
+                    continue
+                if doc.xref_get_key(parent, "Popup")[0] == "null":
+                    doc.xref_set_key(parent, "Popup", f"{x} 0 R")
+            keep.append(x)
+        if keep != annots:
+            doc.xref_set_key(p.xref, "Annots", "[" + " ".join(f"{x} 0 R" for x in keep) + "]")
+            p = doc.reload_page(p)
+        for a in p.annots():
+            if not is_comment(a) or a.type[0] == fitz.PDF_ANNOT_FREE_TEXT:
+                continue
+            if doc.xref_get_key(a.xref, "P")[0] == "null":
+                doc.xref_set_key(a.xref, "P", f"{p.xref} 0 R")
+            for key in ("CreationDate", "M"):
+                if doc.xref_get_key(a.xref, key)[0] == "null":
+                    doc.xref_set_key(a.xref, key, now)
+            if doc.xref_get_key(a.xref, "Popup")[0] == "null":
+                a.set_popup(beside(p, a))
+            popup = int(doc.xref_get_key(a.xref, "Popup")[1].split()[0])
+            if doc.xref_get_key(popup, "Open")[0] == "null":
+                doc.xref_set_key(popup, "Open", "false")
 
 
 def apply(r):
@@ -555,6 +605,7 @@ def apply(r):
     _, doc = document(file)
     try:
         added = change(doc, r["changes"])
+        tidy(doc)
     except Exception:
         docs.pop(file, None)  # not half the changes in the next save
         raise

@@ -71,6 +71,9 @@ highlight opens it there to edit; `x` deletes it. Each comment's text shows
 beside the page, as text in the window, on the row of what it is on and
 joined to it by a line, on whichever side it fits best, in the room the page leaves (zoomed in,
 it may leave none; fitting the width, the page stays taller than the window); `m` hides or shows them.
+They are standard PDF comments, each with its popup, page and dates, so other
+readers (Preview, Acrobat, Chrome, Firefox) open them with a click; saving
+also fixes the comments already in the PDF that lack these.
 Skim shows the text of comments from other programs only after File > Convert
 Notes, which moves them out of the PDF. `C` (or `:PdfComments`) opens the list of them,
 edited like a file:
