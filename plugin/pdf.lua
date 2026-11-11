@@ -25,7 +25,8 @@ vim.api.nvim_create_autocmd('WinClosed', {
     end
   end,
 })
--- each open PDF's view, to open it there next time
+-- each open PDF's view, to open it there next time; and the cursor back, or
+-- the shell's stays hidden (quitting from a PDF leaves no BufLeave)
 vim.api.nvim_create_autocmd('VimLeavePre', {
   group = group,
   callback = function()
@@ -33,6 +34,18 @@ vim.api.nvim_create_autocmd('VimLeavePre', {
       for _, buf in ipairs(vim.api.nvim_list_bufs()) do
         require('pdf').keep_view(buf)
       end
+      require('pdf').hide_cursor(false)
+    end
+  end,
+})
+-- CTRL-Z: the shell's cursor while suspended, hidden again on the way back
+vim.api.nvim_create_autocmd({ 'VimSuspend', 'VimResume' }, {
+  group = group,
+  callback = function(ev)
+    if package.loaded.pdf then
+      require('pdf').hide_cursor(ev.event == 'VimResume' and vim.b.pdf ~= nil)
+      -- out to the terminal before nvim stops
+      vim.cmd.redraw()
     end
   end,
 })
