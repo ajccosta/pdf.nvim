@@ -37,6 +37,7 @@ Plug 'ajccosta/pdf.nvim'
 | drag, then `c`                      | comment on the text selected            |
 | `Esc`                               | let go of the selection                 |
 | `C`                                 | the comments list, beside the page      |
+| `m`                                 | hide or show the comments beside it     |
 
 A count works: `3n` is three pages on, `2+` zooms in twice.
 
@@ -48,7 +49,11 @@ gives an empty window beside it for notes.
 Comments are the PDF's own notes (annotations), saved in the file, so Preview,
 Skim and Acrobat show them too, and they show here on the page. Click a spot
 and press `c` to add one, or drag over text first to comment on it: it shows
-selected while you type, and is saved highlighted. Click a comment to read it.
+selected while you type, and is saved highlighted. Each comment's text shows
+beside the page, as text in the window, on the row of what it is on and
+joined to it by a line, on whichever side it fits best, in the room the page leaves (zoomed in,
+it may leave none; fitting the width, the page stays taller than the window); `m` hides or shows them. Click a comment, or its
+text, to read all of it.
 Skim shows the text of comments from other programs only after File > Convert
 Notes, which moves them out of the PDF. `C` (or `:PdfComments`) opens the list of them,
 edited like a file:
@@ -75,6 +80,8 @@ require('pdf').setup({
   wheel = 0.05,        -- a wheel tick a twentieth (at least a row)
   zoom = 1.25,         -- each zoom step
   comments_width = 40, -- the comments list's window
+  notes_width = 40,     -- columns beside the page for comments (0: none)
+  notes_min_width = 12, -- zoomed in, less room than this: no comments' text
   position = { 'right', 'center' },  -- where a page smaller than the window sits
   keys = { next = { 'n' } },  -- per action, replaces its keys
 })

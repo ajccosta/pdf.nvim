@@ -13,6 +13,15 @@ vim.api.nvim_create_autocmd('BufWinEnter', {
   callback = function(ev)
     if not vim.b[ev.buf].pdf then
       require('pdf').window_options(false)
+      require('pdf').unnote(vim.api.nvim_get_current_win())
+    end
+  end,
+})
+vim.api.nvim_create_autocmd('WinClosed', {
+  group = group,
+  callback = function(ev)
+    if package.loaded.pdf then
+      vim.schedule(function() require('pdf').unnote(tonumber(ev.match)) end)
     end
   end,
 })

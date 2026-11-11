@@ -21,6 +21,8 @@ M.config = {
   wheel = 0.05, -- and a wheel tick this much
   zoom = 1.25, -- a zoom in or out multiplies by this
   comments_width = 40, -- the comments list's window, in columns
+  notes_width = 40, -- columns each side of the page for its comments; 0: none
+  notes_min_width = 12, -- zoomed in, fewer than this left beside the page: none
   keys = {
     next = { 'n', '<Space>', '<PageDown>' },
     prev = { 'p', '<BS>', '<PageUp>' },
@@ -44,6 +46,7 @@ M.config = {
     clear = { '<Esc>' },
     comment = { 'c' },
     comments = { 'C' },
+    margin = { 'm' },
   },
   -- in the comments list
   list_keys = {
@@ -140,9 +143,10 @@ local function on_reply(line)
   if cb then
     cb(r)
   end
+  -- one at a time per window: the next waiting, unless cb sent a later one
   local next = renderer.pending[win]
-  if next then
-    renderer.pending[win] = nil
+  renderer.pending[win] = nil
+  if next and not renderer.busy[win] then
     send_request(next[1], next[2])
   end
 end
@@ -237,6 +241,200 @@ local function selected(st)
   return s and s.page == st.page and { a = s.a, b = s.b } or nil
 end
 
+-- text(content): a comment's text as the list has it, its lines trimmed.
+local function text(content)
+  local lines = {}
+  for _, l in ipairs(vim.split(content or '', '\n')) do
+    if vim.trim(l) ~= '' then
+      lines[#lines + 1] = vim.trim(l)
+    end
+  end
+  return lines
+end
+
+-- margin(st, cols, rows, cpx, rpx): how many of a window's cols go to the
+-- comments' text on each side of the page: none when hidden (`m`), the PDF
+-- has none or the window is narrow; and zoomed in, only what the page leaves
+-- (none under notes_min_width), so they never cover it. Fitting the width,
+-- only what leaves the page taller than the window, so it scrolls by rows.
+local function margin(st, cols, rows, cpx, rpx)
+  local w = M.config.notes_width
+  if st.margin == false or not st.commented or w <= 0 or cols - 2 * w < 20 then
+    return 0
+  end
+  if not st.pw then
+    return w
+  end
+  local k = math.min(2, 1 / (1 - fraction(M.config.position[1])))
+  -- room(n): the page's columns when the comments get n
+  local function room(n)
+    return cols - math.floor(n * k)
+  end
+  local fits
+  if type(st.zoom) == 'number' then
+    -- its width at its zoom within the room
+    fits = function(r)
+      return st.pw * math.min(r * cpx / st.pw, rows * rpx / st.ph) * st.zoom / cpx <= r + 0.01
+    end
+  elseif room(0) * cpx * st.ph / st.pw <= rows * rpx then
+    return w -- the whole width shows all of it: nothing to scroll anyway
+  else
+    -- taller than the window at the room's width
+    fits = function(r)
+      return r * cpx * st.ph / st.pw > rows * rpx
+    end
+  end
+  for n = w, M.config.notes_min_width, -1 do
+    if fits(room(n)) then
+      return n
+    end
+  end
+  return 0
+end
+
+-- wrap(lines, width): lines broken at spaces to fit width columns.
+local function wrap(lines, width)
+  local out = {}
+  for _, l in ipairs(lines) do
+    local line = ''
+    for word in l:gmatch('%S+') do
+      while vim.fn.strdisplaywidth(word) > width do
+        if line ~= '' then
+          out[#out + 1], line = line, ''
+        end
+        out[#out + 1], word = vim.fn.strcharpart(word, 0, width), vim.fn.strcharpart(word, width)
+      end
+      if line ~= '' and vim.fn.strdisplaywidth(line .. ' ' .. word) > width then
+        out[#out + 1], line = line, word
+      else
+        line = line == '' and word or line .. ' ' .. word
+      end
+    end
+    out[#out + 1] = line
+  end
+  return out
+end
+
+local ns = vim.api.nvim_create_namespace('pdf.nvim')
+vim.api.nvim_set_hl(0, 'PdfNote', { default = true, link = 'Normal' })
+
+-- The left side's text is the right side's in a mirror: its lines end where
+-- those start, and its connectors turn the other way.
+local mirrored = { ['╮'] = '╭', ['╰'] = '╯' }
+
+-- Each side's text is in a float of its own beside the page, not in the
+-- page's window: nvim redraws a changed row from its first change to its
+-- last, and in one window that would cross the page and erase it.
+local sides = {} -- win: { left = float, right = float }
+
+-- unnote(win): close win's floats for its comments' text.
+function M.unnote(win)
+  for _, f in pairs(sides[win] or {}) do
+    if vim.api.nvim_win_is_valid(f) then
+      vim.api.nvim_win_close(f, true)
+    end
+  end
+  sides[win] = nil
+end
+
+-- beside(win, side, col, width): side's float over win's columns col on, of
+-- width, cleared; its buffer, or nil when it has no room.
+local function beside(win, side, col, width)
+  sides[win] = sides[win] or {}
+  local f = sides[win][side]
+  if width < 1 then
+    if f and vim.api.nvim_win_is_valid(f) then
+      vim.api.nvim_win_close(f, true)
+    end
+    sides[win][side] = nil
+    return
+  end
+  local height = vim.api.nvim_win_get_height(win)
+  local config = { relative = 'win', win = win, row = 0, col = col, width = width, height = height }
+  if f and vim.api.nvim_win_is_valid(f) then
+    vim.api.nvim_win_set_config(f, config)
+  else
+    local buf = vim.api.nvim_create_buf(false, true)
+    f = vim.api.nvim_open_win(buf, false, vim.tbl_extend('force', config, {
+      focusable = false, mouse = false, style = 'minimal', zindex = 1, noautocmd = true,
+    }))
+    vim.wo[f].winhighlight = 'NormalFloat:Normal'
+    sides[win][side] = f
+  end
+  local buf = vim.api.nvim_win_get_buf(f)
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  if vim.api.nvim_buf_line_count(buf) ~= height then
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.fn['repeat']({ '' }, height))
+  end
+  return buf
+end
+
+-- notes(win): the comments on win's page as text beside it, each on the row
+-- of where it is (or below the one before on its side), a line in its colour
+-- from there. Laid out as on the right, then mirrored for the left.
+local function notes(win)
+  local sh = shown[win]
+  if not sh or not vim.api.nvim_win_is_valid(win) then
+    return M.unnote(win)
+  end
+  sh.noted = { left = {}, right = {} }
+  if sh.margin == 0 then
+    return M.unnote(win)
+  end
+  local info = vim.fn.getwininfo(win)[1]
+  local b = sh.box
+  local cols = info.width - info.textoff
+  local first = b.row - info.winrow -- the page's first row in the window
+  local left = b.col - info.wincol - info.textoff -- the page's first column
+  local past = { right = left + b.w, left = cols - left } -- the column past it
+  local to = cols - sh.margin + 1 -- the text's column
+  local bufs = {
+    left = beside(win, 'left', info.textoff, left),
+    right = beside(win, 'right', info.textoff + past.right, cols - past.right),
+  }
+  local function put(side, row, col, s, hl, m)
+    if row >= info.height or not bufs[side] then
+      return
+    end
+    if side == 'left' then
+      local w = vim.fn.strdisplaywidth(s)
+      if not m then
+        s = vim.fn.join(vim.tbl_map(function(c) return mirrored[c] or c end, vim.fn.reverse(vim.fn.split(s, '\\zs'))), '')
+      end
+      col = cols - col - w
+    else
+      col = col - past.right
+    end
+    vim.api.nvim_buf_set_extmark(bufs[side], ns, row, 0,
+      { virt_text = { { s, hl } }, virt_text_win_col = col, virt_text_pos = 'overlay' })
+    sh.noted[side][row] = m or sh.noted[side][row]
+  end
+  local below = { left = 0, right = 0 }
+  for _, m in ipairs(sh.marks or {}) do
+    local side, from = m.side, past[m.side]
+    local row = first + math.floor((m.y * sh.scale - sh.py) / sh.rpx)
+    if row >= first and row < first + b.h then
+      local hl = 'PdfNote' .. m.color:sub(2)
+      vim.api.nvim_set_hl(0, hl, { fg = m.color })
+      local t = math.max(row, below[side])
+      if t == row then
+        put(side, row, from, string.rep('─', to - from), hl)
+      else
+        put(side, row, from, string.rep('─', to - 2 - from) .. '╮', hl)
+        for r = row + 1, t - 1 do
+          put(side, r, to - 2, '│', hl)
+        end
+        put(side, t, to - 2, '╰─', hl)
+      end
+      local lines = wrap(text(m.content), sh.margin - 2)
+      for i, l in ipairs(lines) do
+        put(side, t + i - 1, to + 1, l, 'PdfNote', m)
+      end
+      below[side] = t + #lines + 1
+    end
+  end
+end
+
 local function draw(win, clear, scale)
   if not vim.api.nvim_win_is_valid(win) then
     return
@@ -248,20 +446,30 @@ local function draw(win, clear, scale)
   end
   local info = vim.fn.getwininfo(win)[1]
   local cols, rows = info.width - info.textoff, info.height
+  -- the page sits where position says in all of the window, its comments'
+  -- text right of it: the page gets what leaves room for that
   -- the last screen row scrolls the terminal
   rows = math.min(rows, vim.o.lines - 1 - info.winrow)
-  if cols < 1 or rows < 1 then
-    return
-  end
   local cw, ch = cell_size()
   -- a cell's size in pixels, whole so rows stack exactly
   local cpx, rpx = math.floor(cw * scale + 0.5), math.floor(ch * scale + 0.5)
+  local all, across = cols, fraction(M.config.position[1])
+  local notes_cols = margin(st, cols, rows, cpx, rpx)
+  cols = all - math.floor(notes_cols * math.min(2, 1 / (1 - across)))
+  -- comments go left of the page too when it leaves room for them there
+  local sides = math.min(math.floor((all - cols) * across), all - notes_cols - cols) >= notes_cols
+    and { 'left', 'right' } or { 'right' }
+  local links = notes_cols > 0 and { cols = notes_cols, sides = sides } or nil
+  if cols < 1 or rows < 1 then
+    return
+  end
   vim.fn.mkdir(cache, 'p')
   local png = string.format('%s/%d-%d.png', cache, vim.fn.getpid(), win)
   shown[win] = nil
   request({
     id = win, file = st.file, page = st.page, zoom = st.zoom,
     x = st.x, y = st.y, out = png, width = cols * cpx, height = rows * rpx, select = selected(st),
+    links = links and vim.tbl_extend('force', links, { row = rpx }),
   }, function(r)
     if r.error then
       return vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
@@ -269,8 +477,15 @@ local function draw(win, clear, scale)
     if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_win_get_buf(win) ~= buf then
       return
     end
-    -- what the renderer kept on the page, unless the state moved on meanwhile
     local now = vim.b[buf].pdf
+    now.commented, now.pw, now.ph = r.commented, r.pw, r.ph
+    if margin(now, all, rows, cpx, rpx) ~= notes_cols then
+      -- the first comment, the last gone, or the page's size now known: the
+      -- comments' room changes
+      vim.b[buf].pdf = now
+      return draw(win, true, scale)
+    end
+    -- what the renderer kept on the page, unless the state moved on meanwhile
     if now.page == st.page and now.x == st.x and now.y == st.y and now.zoom == st.zoom then
       now.x, now.y, now.zoom = r.x, r.y, r.zoom
     end
@@ -281,7 +496,7 @@ local function draw(win, clear, scale)
     local h = math.min(rows, math.ceil(r.ih / rpx))
     local box = {
       row = info.winrow + math.floor((rows - h) * fraction(M.config.position[2])),
-      col = info.wincol + info.textoff + math.floor((cols - w) * fraction(M.config.position[1])),
+      col = info.wincol + info.textoff + math.min(math.floor((all - w) * across), all - notes_cols - w),
       w = w,
       h = h,
     }
@@ -291,9 +506,11 @@ local function draw(win, clear, scale)
     shown[win] = {
       file = st.file, page = st.page, scale = r.scale, px = r.px, py = r.py, pxh = r.pxh,
       iw = r.iw, rows = rows, cpx = cpx, rpx = rpx, box = box, png = png, select = selected(st),
+      margin = notes_cols, marks = r.marks, links = links and vim.tbl_extend('force', links, { row = rpx }),
       -- only a sharp frame filling the window's height scrolls by rows
       rolls = scale == M.config.scale and h == rows and r.ih == rows * rpx,
     }
+    notes(win)
     if clear or not vim.deep_equal(vim.w[win].pdf_box, box) then
       vim.w[win].pdf_box = box
       vim.cmd('mode')
@@ -373,7 +590,7 @@ local function pump(win)
   local h = math.abs(d) * sh.rpx
   request({
     id = win, file = sh.file, page = sh.page, scale = sh.scale,
-    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png, select = sh.select,
+    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png, select = sh.select, links = sh.links,
   }, function(r)
     if shown[win] ~= sh then
       return
@@ -387,6 +604,7 @@ local function pump(win)
       row = d > 0 and b.row + b.h - d or b.row, col = b.col, w = b.w, h = math.abs(d),
     }, roll(sh, d))
     sh.py = sh.py + d * sh.rpx
+    notes(win)
     if vim.api.nvim_get_current_win() == win then
       status(vim.b.pdf)
     end
@@ -453,20 +671,16 @@ function M.fit_width()
   end)
 end
 
+-- margin(): show or hide the comments' text beside the page.
+function M.margin()
+  update(function(st)
+    st.margin = st.margin == false
+  end)
+end
+
 -- Comments: the PDF's own notes (annotations), so other readers show them
 -- too. A list buffer per PDF shows them to edit; :w saves it into the file.
 local lists = {} -- list buffer: { pdf = its PDF's buffer, file, shown = by id }
-
--- text(content): a comment's text as the list has it, its lines trimmed.
-local function text(content)
-  local lines = {}
-  for _, l in ipairs(vim.split(content or '', '\n')) do
-    if vim.trim(l) ~= '' then
-      lines[#lines + 1] = vim.trim(l)
-    end
-  end
-  return lines
-end
 
 -- place(st, page): where a new comment on page goes, as apply's add takes it:
 -- on the text selected on it, else at the spot clicked on it, else the top
@@ -697,26 +911,33 @@ local function at(m, clamp)
   return { page = sh.page, x = (sh.px + (c + 0.5) * sh.cpx) / sh.scale, y = (sh.py + (r + 0.5) * sh.rpx) / sh.scale }
 end
 
+-- show_comment(c): c's text in the message line, or what a click is for.
+local function show_comment(c)
+  local msg = c and table.concat(text(c.content), ' / ') or 'spot marked: c comments there, a drag selects text'
+  local room = vim.v.echospace - 12
+  if vim.fn.strdisplaywidth(msg) > room then
+    msg = vim.fn.strcharpart(msg, 0, room - 1) .. '…'
+  end
+  vim.api.nvim_echo({ { c and 'comment: ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } }, false, {})
+end
+
 -- point(m): a click: mark the spot, for the next comment, and where a drag
--- selecting text starts.
+-- selecting text starts; on a comment's text beside the page, show it.
 function M.point(m)
   forget(vim.api.nvim_get_current_buf())
   local p = at(m)
   if not p then
-    return
+    local sh = shown[m.winid]
+    local side = sh and m.screencol < sh.box.col and 'left' or 'right'
+    local c = sh and sh.noted and sh.noted[side][m.winrow - 1]
+    return c and show_comment(c)
   end
   local st = vim.b.pdf
   st.point = p
   vim.b.pdf = st
   -- on a comment, its text; else what the spot is for
   op({ op = 'at', file = st.file, page = p.page, x = p.x, y = p.y }, function(r)
-    local c = r.comment
-    local msg = c and table.concat(text(c.content), ' / ') or 'spot marked: c comments there, a drag selects text'
-    local room = vim.v.echospace - 12
-    if vim.fn.strdisplaywidth(msg) > room then
-      msg = vim.fn.strcharpart(msg, 0, room - 1) .. '…'
-    end
-    vim.api.nvim_echo({ { c and 'comment: ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } }, false, {})
+    show_comment(r.comment)
   end)
 end
 
@@ -760,10 +981,14 @@ local actions = {
   clear = function() forget(vim.api.nvim_get_current_buf()) end,
   comment = function() M.comment() end,
   comments = function() M.comments() end,
+  margin = function() M.margin() end,
 }
 
 -- The options a PDF's window has, so all its columns are the page's.
-M.pdf_window = { number = false, relativenumber = false, signcolumn = 'no', foldcolumn = '0' }
+M.pdf_window = {
+  number = false, relativenumber = false, signcolumn = 'no', foldcolumn = '0',
+  colorcolumn = '', cursorline = false, cursorcolumn = false,
+}
 
 -- window_options(pdf): give the current window a PDF's options, keeping what
 -- it had; or, pdf false, give it back what it had. Window options go with the

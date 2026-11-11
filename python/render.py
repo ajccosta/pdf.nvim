@@ -13,7 +13,12 @@
 #     point) from (px, py), in pixels.
 # Either way it writes a PNG at out, at most width x height. With "select"
 # {"a", "b"} ({"x", "y"} on the page, in points), the text from a to b shows
-# selected, and the reply's "selected" has it.
+# selected, and the reply's "selected" has it. The reply's "marks" are the
+# page's comments, top to bottom, each {"id", "y": just under it, "side": where
+# its text goes, "content", "color": "#rrggbb"}, and "commented" whether any
+# page has one. With "links": {"cols": the text's width, "row": a row's height
+# in pixels, "sides": ["left", "right"] or one}, each comment goes on the side
+# where its text sits nearest its row, a line from it to that edge of the page.
 #
 # The reply: {"id", "count" (pages), "iw", "ih" (the image's size), "x", "y"
 # (kept on the page), "mx", "my" (the most they can be), "vw", "vh" (the
@@ -40,7 +45,8 @@ import uuid
 import fitz
 
 docs = {}  # by file: (mtime, document)
-pages = {}  # (file, mtime, page, scale): the whole page drawn
+pages = {}  # (file, mtime, page, links, scale): the whole page drawn
+sheets = {}  # (file, mtime, page): the page with its links, to draw
 words = {}  # (file, mtime, page): its words, in reading order
 MAX_PAGES = 6
 MAX_PIXELS = 40_000_000  # past this, only the part asked for is drawn
@@ -53,13 +59,17 @@ def document(file):
     return docs[file]
 
 
-def whole_page(file, mtime, p, scale):
-    key = (file, mtime, p.number, round(scale, 6))
-    if key not in pages:
-        while len(pages) >= MAX_PAGES:
-            pages.pop(next(iter(pages)))
-        pages[key] = p.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-    return pages[key]
+def cached(cache, key, make):
+    if key not in cache:
+        while len(cache) >= MAX_PAGES:
+            cache.pop(next(iter(cache)))
+        cache[key] = make()
+    return cache[key]
+
+
+def whole_page(file, mtime, p, links, sheet, scale):
+    return cached(pages, (file, mtime, p.number, links, round(scale, 6)),
+                  lambda: sheet.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False))
 
 
 def page_words(file, mtime, p):
@@ -94,6 +104,71 @@ def selection(file, mtime, p, sel):
     return text, [v[0] for v in lines.values()], [v[1] for v in lines.values()]
 
 
+HIGHLIGHTS = (fitz.PDF_ANNOT_HIGHLIGHT, fitz.PDF_ANNOT_UNDERLINE, fitz.PDF_ANNOT_STRIKE_OUT, fitz.PDF_ANNOT_SQUIGGLY)
+
+
+def marks(p, links=None, scale=1):
+    """p's comments, top to bottom: each (annot, its first line's box, its
+    colour, the side its text goes on). The sides are links' sides, each
+    comment on the one where its text, about its lines' rows tall, starts
+    nearest its row; on a tie, the side of the page it is nearer. Its line
+    runs just under its text, not through the words beside it."""
+    found = []
+    for a in p.annots():
+        if not is_comment(a):
+            continue
+        v = a.vertices
+        if a.type[0] in HIGHLIGHTS and v and len(v) % 4 == 0:
+            first = fitz.Quad(v[:4]).rect * p.rotation_matrix
+        else:
+            first = a.rect * p.rotation_matrix
+        found.append((a, first, a.colors.get("stroke") or (1, 0.85, 0)))
+    found.sort(key=lambda f: (f[1].y0, f[1].x0))
+    sides = links["sides"] if links else ["right"]
+    row, width = (links["row"] / scale, max(1, links["cols"] - 2)) if links else (0, 1)
+    below = {side: 0 for side in sides}
+    out = []
+    for a, first, color in found:
+        y = first.y1 + 1
+        lines = sum(-(-len(l.strip()) // width) for l in a.info.get("content", "").split("\n") if l.strip())
+        near = "left" if first.x0 + first.x1 < p.rect.width else "right"
+        side = min(sides, key=lambda s: (max(y, below[s]), s != near))
+        below[side] = max(y, below[side]) + (max(lines, 1) + 1) * row
+        out.append((a, first, color, side))
+    return out
+
+
+def has_comments(file, mtime, doc):
+    return cached(sheets, (file, mtime, "any"), lambda: any(is_comment(a) for p in doc for a in p.annots()))
+
+
+def sheet(file, mtime, p, found):
+    """p with a line from each of its comments to its text's side."""
+    if not found:
+        return p
+
+    def make():
+        pw, ph = p.rect.width, p.rect.height
+        one = fitz.open()
+        one.insert_pdf(p.parent, from_page=p.number, to_page=p.number)
+        one.bake()  # its comments into its content, to show with it
+        out = fitz.open()
+        s = out.new_page(width=pw, height=ph)
+        s.show_pdf_page(s.rect, one, 0)
+        for _, first, color, side in found:
+            y = first.y1 + 1
+            at, edge = (first.x0, 0) if side == "left" else (first.x1, pw)
+            dark = tuple(c * 0.75 for c in color)
+            s.draw_line(fitz.Point(at, y), fitz.Point(edge, y), color=dark, width=0.6, dashes="[2 1.5] 0")
+        return out, s  # out kept alive with s
+
+    return cached(sheets, (file, mtime, p.number, sides_of(found)), make)[1]
+
+
+def sides_of(found):
+    return "".join(f[3][0] for f in found)
+
+
 def render(r):
     mtime, doc = document(r["file"])
     p = doc[max(0, min(int(r["page"]), doc.page_count - 1))]
@@ -106,8 +181,11 @@ def render(r):
         fit = min(width / pw, height / ph)
         zoom = max(1, width / pw / fit) if r["zoom"] == "width" else float(r["zoom"])
         scale = fit * zoom
+    links = r.get("links")
+    found = marks(p, links, scale)
+    src = sheet(r["file"], mtime, p, found) if links else p
     whole = pw * ph * scale * scale <= MAX_PIXELS
-    page = whole_page(r["file"], mtime, p, scale) if whole else None
+    page = whole_page(r["file"], mtime, p, links and sides_of(found), src, scale) if whole else None
     pxw, pxh = (page.width, page.height) if whole else (round(pw * scale), round(ph * scale))
     w, h = min(pxw, width), min(pxh, height)
     if "scale" in r:
@@ -121,7 +199,7 @@ def render(r):
         pix.copy(page, rect)
         pix.set_origin(0, 0)
     else:
-        pix = p.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=fitz.Rect(rect) / scale, alpha=False)
+        pix = src.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=fitz.Rect(rect) / scale, alpha=False)
     reply = {}
     if r.get("select"):
         text, rects, _ = selection(r["file"], mtime, p, r["select"])
@@ -132,8 +210,9 @@ def render(r):
                 pix.invert_irect(box)
         reply["selected"] = text
     pix.save(r["out"])
-    notes = sum(1 for a in p.annots() if is_comment(a))
-    return dict(reply, notes=notes, count=doc.page_count, iw=pix.width, ih=pix.height, x=px / scale, y=py / scale,
+    found = [dict(id=a.xref, y=first.y1 + 1, side=side, content=a.info.get("content", ""),
+                  color="#%02x%02x%02x" % tuple(round(c * 255) for c in color)) for a, first, color, side in found]
+    return dict(reply, notes=len(found), marks=found, commented=has_comments(r["file"], mtime, doc), count=doc.page_count, iw=pix.width, ih=pix.height, x=px / scale, y=py / scale,
                 mx=(pxw - w) / scale, my=(pxh - h) / scale, vw=w / scale, vh=h / scale, pw=pw, ph=ph,
                 zoom=zoom, scale=scale, px=px, py=py, pxw=pxw, pxh=pxh)
 
@@ -189,7 +268,10 @@ def change(doc, changes):
                 a.set_popup(fitz.Rect(x, a.rect.y0, x + 200, a.rect.y0 + 100))
             else:
                 # x, y are where it shows; the note's point is on the unrotated page
-                at = fitz.Point(float(c["x"]), float(c["y"])) * p.derotation_matrix
+                # (kept on the page)
+                x = max(0, min(float(c["x"]), p.rect.width - 20))
+                y = max(0, min(float(c["y"]), p.rect.height - 20))
+                at = fitz.Point(x, y) * p.derotation_matrix
                 a = p.add_text_annot(at, c["content"], icon="Comment")
             a.set_info(content=c["content"], title=getpass.getuser())
             a.update()
