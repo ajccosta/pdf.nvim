@@ -86,17 +86,54 @@ local function saved()
   return ok and type(t) == 'table' and t or {}
 end
 
--- remember(name, value): set config[name] for this and later sessions.
-local function remember(name, value)
-  M.config[name] = value
-  local t = saved()
-  t[name] = value
+local function write_saved(t)
   vim.fn.mkdir(vim.fn.fnamemodify(state_file, ':h'), 'p')
   local f = io.open(state_file, 'w')
   if f then
     f:write(vim.json.encode(t))
     f:close()
   end
+end
+
+-- remember(name, value): set config[name] for this and later sessions.
+local function remember(name, value)
+  M.config[name] = value
+  local t = saved()
+  t[name] = value
+  write_saved(t)
+end
+
+-- What of a PDF's view is kept when it is left, to open it there again, for
+-- the latest MAX_VIEWS files.
+M.kept = { 'page', 'zoom', 'x', 'y' }
+local MAX_VIEWS = 200
+
+local function kept_view(file)
+  local views = saved().views
+  local v = type(views) == 'table' and views[file]
+  return type(v) == 'table' and v or {}
+end
+
+-- keep_view(buf): remember where buf's PDF was left.
+function M.keep_view(buf)
+  local st = vim.api.nvim_buf_is_valid(buf) and vim.b[buf].pdf
+  if not st then
+    return
+  end
+  local t = saved()
+  local views = type(t.views) == 'table' and t.views or {}
+  local v = { at = os.time() }
+  for _, k in ipairs(M.kept) do
+    v[k] = st[k]
+  end
+  views[st.file] = v
+  local files = vim.tbl_keys(views)
+  table.sort(files, function(a, b) return (views[a].at or 0) > (views[b].at or 0) end)
+  for i = MAX_VIEWS + 1, #files do
+    views[files[i]] = nil
+  end
+  t.views = views
+  write_saved(t)
 end
 
 local function apply_saved()
@@ -1154,8 +1191,15 @@ end
 
 -- open(buf): what replaces reading a .pdf into buf.
 function M.open(buf)
-  local file = vim.api.nvim_buf_get_name(buf)
-  vim.b[buf].pdf = { file = file, page = 0, zoom = M.config.view, x = 0, y = 0 }
+  local file = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ':p')
+  local st = { file = file, page = 0, zoom = M.config.view, x = 0, y = 0 }
+  local v = kept_view(file)
+  for _, k in ipairs(M.kept) do
+    if v[k] ~= nil then
+      st[k] = v[k]
+    end
+  end
+  vim.b[buf].pdf = st
   local bo = vim.bo[buf]
   bo.buftype, bo.swapfile, bo.bufhidden = 'nofile', false, 'hide'
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.fn['repeat']({ '' }, vim.o.lines))
@@ -1173,6 +1217,10 @@ function M.open(buf)
   vim.api.nvim_create_autocmd({ 'BufWinEnter', 'FocusGained', 'CmdlineLeave' }, {
     buffer = buf,
     callback = function() M.redraw(true) end,
+  })
+  vim.api.nvim_create_autocmd({ 'BufWinLeave', 'BufUnload' }, {
+    buffer = buf,
+    callback = function() M.keep_view(buf) end,
   })
   M.window_options(true)
   M.redraw(true)

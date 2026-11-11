@@ -38,6 +38,9 @@ The wheel scrolls the window under the mouse: the page when over it, from any
 window, and the other windows as usual. The rest of the keys act in the PDF's
 window, so go to another (CTRL-W h, CTRL-W l, or a click) to type there.
 
+A PDF opens where it was left: its page, zoom and spot are remembered across
+sessions (in stdpath('state')/pdf.nvim.json), for the last 200 files.
+
 A paste into a PDF's window (a middle click, a PDF dropped on it) opens the
 PDF when it is a PDF's path, and is dropped otherwise.
 

@@ -97,4 +97,5 @@ require('pdf').setup({
 or `right`, then `top`, `center` or `bottom`, or a fraction from 0 to 1
 (`:PdfPosition 0.25`). `:PdfColor {name|#rrggbb}` picks new comments' colour
 (`yellow`, `orange`, `red`, `pink`, `purple`, `blue`, `teal`, `green`). Both
-choices are remembered across sessions.
+choices are remembered across sessions. Each PDF opens where it was left: its page,
+zoom and spot are remembered too, for the last 200 files.

@@ -25,6 +25,17 @@ vim.api.nvim_create_autocmd('WinClosed', {
     end
   end,
 })
+-- each open PDF's view, to open it there next time
+vim.api.nvim_create_autocmd('VimLeavePre', {
+  group = group,
+  callback = function()
+    if package.loaded.pdf then
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        require('pdf').keep_view(buf)
+      end
+    end
+  end,
+})
 vim.api.nvim_create_autocmd('WinNew', {
   group = group,
   callback = function()
