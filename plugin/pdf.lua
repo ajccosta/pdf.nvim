@@ -57,3 +57,7 @@ end, {
     return n <= 1 and { 'left', 'center', 'right' } or { 'top', 'center', 'bottom' }
   end,
 })
+-- :PdfComments: open or close the PDF's comments list
+vim.api.nvim_create_user_command('PdfComments', function()
+  require('pdf').comments()
+end, {})

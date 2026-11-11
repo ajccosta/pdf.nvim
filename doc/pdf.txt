@@ -5,8 +5,9 @@ inline image protocol. Needs Neovim 0.12+, iTerm2 and a `python3` with PyMuPDF
 (`pip install pymupdf`).
 
 1. Keys                                                       |pdf.nvim-keys|
-2. Commands                                               |pdf.nvim-commands|
-3. Setup                                                     |pdf.nvim-setup|
+2. Comments                                               |pdf.nvim-comments|
+3. Commands                                               |pdf.nvim-commands|
+4. Setup                                                     |pdf.nvim-setup|
 
 ==============================================================================
 1. Keys                                                        *pdf.nvim-keys*
@@ -22,6 +23,10 @@ In a PDF's window:
   `+` `=` `-`                       zoom in / out
   `w`                             fit the page's width (what a PDF opens with)
   `0`                             fit the whole page
+  click                         mark a spot for the next comment
+  `c`                             comment on the page, at the spot marked (else
+                                the top left of what shows)
+  `C`                             open or close the comments list
 
 A count works: `3n` is three pages on, `2+` zooms in twice.
 
@@ -35,7 +40,29 @@ the file. `split_empty = false` keeps the page in both. The keys are set
 per action in `keys` (|pdf.nvim-setup|).
 
 ==============================================================================
-2. Commands                                                *pdf.nvim-commands*
+2. Comments                                                *pdf.nvim-comments*
+
+Comments are the PDF's own notes (text annotations), saved in the file, so
+Preview, Skim and Acrobat show them too; any annotation with text counts. The
+page shows them where they sit.
+
+`C` or |:PdfComments| opens a list of them beside the page, edited like a
+file. A comment is a line, `p{page} #{id}  {text}`, and indented lines after
+it go on with its text: >
+  p1 #1960  change this text to change the comment
+  p3 #1963  a comment over
+      more than one line
+  p2 a new one on page 2
+  a new one on the page shown
+<
+Change a comment's text, delete its lines, or add a line without an `#{id}`,
+then `:w` saves it all into the PDF. A new one goes at the spot last clicked
+on its page, else at the top left of what the window shows, else of the page.
+Changing the `p{page}` moves one to that page. Lines starting with `"` are
+hints. <CR> on a comment shows it in the PDF's window.
+
+==============================================================================
+3. Commands                                                *pdf.nvim-commands*
 
                                                                 *:PdfPosition*
 :PdfPosition {across} [{down}]
@@ -58,8 +85,12 @@ per action in `keys` (|pdf.nvim-setup|).
 
 :PdfPosition            Shows where pages sit now.
 
+                                                                *:PdfComments*
+:PdfComments            Opens or closes the PDF's comments list, as `C` does
+                        (|pdf.nvim-comments|).
+
 ==============================================================================
-3. Setup                                                      *pdf.nvim-setup*
+4. Setup                                                      *pdf.nvim-setup*
 
 `require('pdf').setup({...})` changes any of these (the defaults): >lua
 
@@ -74,11 +105,13 @@ per action in `keys` (|pdf.nvim-setup|).
     scroll = 0.2,         -- a scroll key moves a fifth of the window
     wheel = 0.05,         -- a wheel tick a twentieth (at least a row)
     zoom = 1.25,          -- each zoom step
+    comments_width = 40,  -- the comments list's window
     keys = { next = { 'n' } },  -- per action, replaces its keys
+    list_keys = { jump = { '<CR>' } },  -- in the comments list
   })
 <
 The actions in `keys`: `next`, `prev`, `first`, `last`, `down`, `up`, `left`,
 `right`, `wheel_down`, `wheel_up`, `wheel_left`, `wheel_right`, `zoom_in`,
-`zoom_out`, `fit`, `fit_width`.
+`zoom_out`, `fit`, `fit_width`, `point` (the click), `comment`, `comments`.
 
  vim:tw=78:ts=8:ft=help:norl:

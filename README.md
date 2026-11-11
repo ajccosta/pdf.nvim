@@ -32,11 +32,30 @@ Plug 'ajccosta/pdf.nvim'
 | `+` `=` `-`                         | zoom in / out                           |
 | `w`                                 | fit the page's width                    |
 | `0`                                 | fit the whole page                      |
+| click, then `c`                     | comment on that spot                    |
+| `C`                                 | the comments list, beside the page      |
 
 A count works: `3n` is three pages on, `2+` zooms in twice.
 
 The wheel scrolls whichever window is under the mouse. `CTRL-W v` on the PDF
 gives an empty window beside it for notes.
+
+## Comments
+
+Comments are the PDF's own notes (annotations), saved in the file, so Preview,
+Skim and Acrobat show them too, and they show here on the page. Click a spot
+and press `c` to add one. `C` (or `:PdfComments`) opens the list of them,
+edited like a file:
+
+```
+p1 #1960  change this text to change the comment
+p3 #1963  a comment over
+    more than one line
+p2 a new one on page 2
+```
+
+Change a line's text, delete it, or add one, then `:w` saves it into the PDF.
+`<CR>` on a comment shows it on its page.
 
 ## Setup
 
@@ -49,6 +68,7 @@ require('pdf').setup({
   scroll = 0.2,        -- a scroll key moves a fifth of the window
   wheel = 0.05,        -- a wheel tick a twentieth (at least a row)
   zoom = 1.25,         -- each zoom step
+  comments_width = 40, -- the comments list's window
   position = { 'right', 'center' },  -- where a page smaller than the window sits
   keys = { next = { 'n' } },  -- per action, replaces its keys
 })

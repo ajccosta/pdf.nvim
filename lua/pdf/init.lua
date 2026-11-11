@@ -20,6 +20,7 @@ M.config = {
   scroll = 0.2, -- a scroll key moves this much of the window
   wheel = 0.05, -- and a wheel tick this much
   zoom = 1.25, -- a zoom in or out multiplies by this
+  comments_width = 40, -- the comments list's window, in columns
   keys = {
     next = { 'n', '<Space>', '<PageDown>' },
     prev = { 'p', '<BS>', '<PageUp>' },
@@ -37,6 +38,13 @@ M.config = {
     zoom_out = { '-' },
     fit = { '0' },
     fit_width = { 'w' },
+    point = { '<LeftMouse>' },
+    comment = { 'c' },
+    comments = { 'C' },
+  },
+  -- in the comments list
+  list_keys = {
+    jump = { '<CR>' },
   },
 }
 
@@ -175,6 +183,20 @@ local function request(req, cb)
   end
 end
 
+-- op(req, cb): one of the renderer's other ops (comments, apply); each its
+-- own, none dropped for a later one.
+local ops = 0
+local function op(req, cb)
+  ops = ops + 1
+  req.id = 'op' .. ops
+  send_request(req, function(r)
+    if r.error then
+      return vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
+    end
+    cb(r)
+  end)
+end
+
 -- send(png, box, before): draw png in box's cells, after the escapes before.
 local function send(png, box, before)
   local f = io.open(png, 'rb')
@@ -190,7 +212,8 @@ end
 
 local function status(st)
   local zoom = math.abs(st.zoom - 1) < 0.01 and '' or string.format('  %d%%', st.zoom * 100)
-  vim.api.nvim_echo({ { string.format('page %d/%d%s', st.page + 1, st.count or 0, zoom) } }, false, {})
+  local notes = (st.notes or 0) > 0 and string.format('  %d comment%s', st.notes, st.notes > 1 and 's' or '') or ''
+  vim.api.nvim_echo({ { string.format('page %d/%d%s%s', st.page + 1, st.count or 0, zoom, notes) } }, false, {})
 end
 
 -- draw(win, clear, scale): render win's page and draw it. nvim's own redraw
@@ -237,7 +260,7 @@ local function draw(win, clear, scale)
     if now.page == st.page and now.x == st.x and now.y == st.y and now.zoom == st.zoom then
       now.x, now.y, now.zoom = r.x, r.y, r.zoom
     end
-    now.count, now.mx, now.my, now.vw, now.vh = r.count, r.mx, r.my, r.vw, r.vh
+    now.count, now.mx, now.my, now.vw, now.vh, now.notes = r.count, r.mx, r.my, r.vw, r.vh, r.notes
     vim.b[buf].pdf = now
     local w = math.min(cols, math.ceil(r.iw / cpx))
     local h = math.min(rows, math.ceil(r.ih / rpx))
@@ -252,7 +275,7 @@ local function draw(win, clear, scale)
     end
     shown[win] = {
       file = st.file, page = st.page, scale = r.scale, px = r.px, py = r.py, pxh = r.pxh,
-      iw = r.iw, rows = rows, rpx = rpx, box = box, png = png,
+      iw = r.iw, rows = rows, cpx = cpx, rpx = rpx, box = box, png = png,
       -- only a sharp frame filling the window's height scrolls by rows
       rolls = scale == M.config.scale and h == rows and r.ih == rows * rpx,
     }
@@ -415,6 +438,231 @@ function M.fit_width()
   end)
 end
 
+-- Comments: the PDF's own notes (annotations), so other readers show them
+-- too. A list buffer per PDF shows them to edit; :w saves it into the file.
+local lists = {} -- list buffer: { pdf = its PDF's buffer, file, shown = by id }
+
+-- text(content): a comment's text as the list has it, its lines trimmed.
+local function text(content)
+  local lines = {}
+  for _, l in ipairs(vim.split(content or '', '\n')) do
+    if vim.trim(l) ~= '' then
+      lines[#lines + 1] = vim.trim(l)
+    end
+  end
+  return lines
+end
+
+-- spot(st, page): where a new comment on page goes: the spot clicked on it,
+-- else the top left of what the window shows of it, else of the page.
+local function spot(st, page)
+  local p = st.point
+  if p and p.page == page then
+    return p.x, p.y
+  elseif page == st.page then
+    return st.x + 10, st.y + 10
+  end
+  return 20, 20
+end
+
+-- fill(lbuf, comments): show comments in the list buffer lbuf.
+local function fill(lbuf, comments)
+  local l = lists[lbuf]
+  local top = function(c) return math.min(c.rect[2], c.rect[4]) end
+  table.sort(comments, function(a, b)
+    if a.page ~= b.page then
+      return a.page < b.page
+    end
+    return top(a) < top(b)
+  end)
+  local lines = {
+    '" ' .. vim.fn.fnamemodify(l.file, ':t') .. ': change, delete or add lines, then :w saves them in it',
+    '" a new one: p<page> text, or just text for the page shown; indent to go on',
+  }
+  l.shown = {}
+  for _, c in ipairs(comments) do
+    l.shown[c.id] = c
+    local t = text(c.content)
+    lines[#lines + 1] = string.format('p%d #%d  %s', c.page + 1, c.id, t[1] or '')
+    for i = 2, #t do
+      lines[#lines + 1] = '    ' .. t[i]
+    end
+  end
+  vim.api.nvim_buf_set_lines(lbuf, 0, -1, false, lines)
+  vim.bo[lbuf].modified = false
+end
+
+-- entries(lines): the list's comments, each { page, id, content }; page and
+-- id nil when the line does not give them.
+local function entries(lines)
+  local out = {}
+  for _, line in ipairs(lines) do
+    if line:match('^"') or vim.trim(line) == '' then
+      -- a hint, or room
+    elseif line:match('^%s') and #out > 0 then
+      table.insert(out[#out].lines, vim.trim(line))
+    else
+      local page, id, t = line:match('^p(%d+)%s+#(%d+)%s*(.*)$')
+      if not page then
+        page, t = line:match('^p(%d+)%s+(.*)$')
+      end
+      out[#out + 1] = { page = page and tonumber(page) - 1, id = tonumber(id), lines = text(t or line) }
+    end
+  end
+  for _, e in ipairs(out) do
+    e.content = table.concat(e.lines, '\n')
+  end
+  return out
+end
+
+-- buf_win(buf): a window of this tab showing buf.
+local function buf_win(buf)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      return win
+    end
+  end
+end
+
+-- change(file, changes, lbuf): save changes into file, then show what it has
+-- in its lists (lbuf's even when modified: they are its changes) and pages.
+local function change(file, changes, lbuf)
+  if #changes == 0 then
+    if lbuf then
+      vim.bo[lbuf].modified = false
+    end
+    return
+  end
+  op({ op = 'apply', file = file, changes = changes }, function(r)
+    for b, l in pairs(lists) do
+      if l.file == file and vim.api.nvim_buf_is_valid(b) and (b == lbuf or not vim.bo[b].modified) then
+        fill(b, r.comments)
+      end
+    end
+    M.redraw()
+  end)
+end
+
+-- save(lbuf): the list's edits into the PDF, against what it showed.
+local function save(lbuf)
+  local l = lists[lbuf]
+  local st = vim.b[l.pdf].pdf or {}
+  local changes, seen = {}, {}
+  local function add(e)
+    local page = e.page or st.page or 0
+    local x, y = spot(st, page)
+    changes[#changes + 1] = { ['do'] = 'add', page = page, x = x, y = y, content = e.content }
+  end
+  for _, e in ipairs(entries(vim.api.nvim_buf_get_lines(lbuf, 0, -1, false))) do
+    local old = e.id and not seen[e.id] and l.shown[e.id]
+    if old then
+      seen[e.id] = true
+      if e.page ~= old.page then
+        -- moved to another page: a new one there
+        changes[#changes + 1] = { ['do'] = 'delete', id = e.id }
+        add(e)
+      elseif e.content ~= table.concat(text(old.content), '\n') then
+        changes[#changes + 1] = { ['do'] = 'set', id = e.id, content = e.content }
+      end
+    elseif e.content ~= '' then
+      add(e) -- new, or a line copied
+    end
+  end
+  for id in pairs(l.shown) do
+    if not seen[id] then
+      changes[#changes + 1] = { ['do'] = 'delete', id = id }
+    end
+  end
+  change(l.file, changes, lbuf)
+end
+
+-- jump(): show the comment under the cursor, in its PDF's window.
+local function jump()
+  local l = lists[vim.api.nvim_get_current_buf()]
+  local n = vim.fn.line('.')
+  while n > 1 and vim.fn.getline(n):match('^%s') do
+    n = n - 1
+  end
+  local e = entries({ vim.fn.getline(n) })[1]
+  local win = l and e and e.page and buf_win(l.pdf)
+  if not win then
+    return
+  end
+  local c = e.id and l.shown[e.id]
+  vim.api.nvim_win_call(win, function()
+    update(function(st)
+      st.page = e.page
+      st.y = c and math.max(0, math.min(c.rect[2], c.rect[4]) - (st.vh or 0) / 4) or 0
+    end)
+  end)
+end
+
+-- comments(): open or close the current PDF's comments list beside it.
+function M.comments()
+  local buf = vim.api.nvim_get_current_buf()
+  local st = vim.b[buf].pdf
+  if not st then
+    return vim.notify('pdf.nvim: not a PDF', vim.log.levels.ERROR)
+  end
+  local lbuf
+  for b, l in pairs(lists) do
+    if l.pdf == buf and vim.api.nvim_buf_is_valid(b) then
+      lbuf = b
+    end
+  end
+  local open = lbuf and buf_win(lbuf)
+  if open then
+    return vim.api.nvim_win_close(open, false)
+  end
+  if not lbuf then
+    lbuf = vim.api.nvim_create_buf(false, false)
+    lists[lbuf] = { pdf = buf, file = st.file, shown = {} }
+    vim.api.nvim_buf_set_name(lbuf, 'pdf-comments://' .. st.file)
+    local bo = vim.bo[lbuf]
+    bo.buftype, bo.swapfile, bo.bufhidden, bo.filetype = 'acwrite', false, 'hide', 'pdfcomments'
+    vim.api.nvim_create_autocmd('BufWriteCmd', { buffer = lbuf, callback = function() save(lbuf) end })
+    vim.api.nvim_create_autocmd('BufWipeout', { buffer = lbuf, callback = function() lists[lbuf] = nil end })
+    for _, key in ipairs(M.config.list_keys.jump) do
+      vim.keymap.set('n', key, jump, { buffer = lbuf, desc = 'pdf.nvim: show this comment' })
+    end
+    op({ op = 'comments', file = st.file }, function(r) fill(lbuf, r.comments) end)
+  end
+  local win = vim.api.nvim_open_win(lbuf, true, { split = 'left', win = 0, width = M.config.comments_width })
+  vim.wo[win][0].wrap, vim.wo[win][0].linebreak = true, true
+end
+
+-- comment(): add a comment on the page shown, at the spot clicked if any.
+function M.comment()
+  local buf = vim.api.nvim_get_current_buf()
+  local st = vim.b.pdf
+  vim.ui.input({ prompt = string.format('comment on page %d: ', st.page + 1) }, function(t)
+    if not t or vim.trim(t) == '' then
+      return
+    end
+    local x, y = spot(st, st.page)
+    local now = vim.b[buf].pdf
+    now.point = nil
+    vim.b[buf].pdf = now
+    change(st.file, { { ['do'] = 'add', page = st.page, x = x, y = y, content = t } })
+  end)
+end
+
+-- point(): mark the spot under the mouse, for the next comment.
+function M.point()
+  local sh, st, m = shown[vim.api.nvim_get_current_win()], vim.b.pdf, vim.fn.getmousepos()
+  if not sh then
+    return
+  end
+  local b = sh.box
+  local c, r = m.screencol - b.col, m.screenrow - b.row
+  if c < 0 or r < 0 or c >= b.w or r >= b.h then
+    return
+  end
+  st.point = { page = sh.page, x = (sh.px + (c + 0.5) * sh.cpx) / sh.scale, y = (sh.py + (r + 0.5) * sh.rpx) / sh.scale }
+  vim.b.pdf = st
+  vim.api.nvim_echo({ { 'pdf.nvim: spot marked, c comments there' } }, false, {})
+end
+
 local function scroller(dx, dy, step)
   return function()
     local n = vim.v.count1
@@ -439,6 +687,9 @@ local actions = {
   zoom_out = function() M.zoom(M.config.zoom ^ -vim.v.count1) end,
   fit = function() M.zoom() end,
   fit_width = function() M.fit_width() end,
+  point = function() M.point() end,
+  comment = function() M.comment() end,
+  comments = function() M.comments() end,
 }
 
 -- The options a PDF's window has, so all its columns are the page's.
@@ -470,7 +721,12 @@ end
 
 -- The actions that act on the window under the mouse, not the current one:
 -- their keys are mapped everywhere, and do what they did before elsewhere.
-M.mouse_actions = { wheel_down = true, wheel_up = true, wheel_left = true, wheel_right = true }
+-- pass: over a PDF too the key still does its own (a click goes to the
+-- window), and the action after.
+M.mouse_actions = {
+  wheel_down = {}, wheel_up = {}, wheel_left = {}, wheel_right = {},
+  point = { pass = true },
+}
 
 local mouse_mapped = false
 
@@ -491,7 +747,7 @@ local function map_mouse()
             vim.api.nvim_win_call(win, actions[action])
           end
         end)
-        return ''
+        return M.mouse_actions[action].pass and key or ''
       end, { expr = true, replace_keycodes = true, desc = 'pdf.nvim: ' .. action .. ' under the mouse' })
     end
   end
