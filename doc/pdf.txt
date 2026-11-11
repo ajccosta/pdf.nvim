@@ -24,8 +24,10 @@ In a PDF's window:
   `w`                             fit the page's width (what a PDF opens with)
   `0`                             fit the whole page
   click                         mark a spot for the next comment
-  `c`                             comment on the page, at the spot marked (else
-                                the top left of what shows)
+  drag                          select the text from there to the mouse
+  `c`                             comment on the text selected, else at the
+                                spot marked, else the top left of what shows
+  <Esc>                         let go of the spot and the selection
   `C`                             open or close the comments list
 
 A count works: `3n` is three pages on, `2+` zooms in twice.
@@ -46,6 +48,10 @@ Comments are the PDF's own notes (text annotations), saved in the file, so
 Preview, Skim and Acrobat show them too; any annotation with text counts. The
 page shows them where they sit.
 
+Drag over text to select it (it shows inverted, and the message line has
+it), then `c` comments on it: the comment is saved as a highlight of that text,
+with the comment as its note. A click without a drag marks a spot instead.
+
 `C` or |:PdfComments| opens a list of them beside the page, edited like a
 file. A comment is a line, `p{page} #{id}  {text}`, and indented lines after
 it go on with its text: >
@@ -56,8 +62,9 @@ it go on with its text: >
   a new one on the page shown
 <
 Change a comment's text, delete its lines, or add a line without an `#{id}`,
-then `:w` saves it all into the PDF. A new one goes at the spot last clicked
-on its page, else at the top left of what the window shows, else of the page.
+then `:w` saves it all into the PDF. A new one goes on the text selected on
+its page, else at the spot last clicked on it, else at the top left of what
+the window shows, else of the page.
 Changing the `p{page}` moves one to that page. Lines starting with `"` are
 hints. <CR> on a comment shows it in the PDF's window.
 
@@ -112,6 +119,7 @@ hints. <CR> on a comment shows it in the PDF's window.
 <
 The actions in `keys`: `next`, `prev`, `first`, `last`, `down`, `up`, `left`,
 `right`, `wheel_down`, `wheel_up`, `wheel_left`, `wheel_right`, `zoom_in`,
-`zoom_out`, `fit`, `fit_width`, `point` (the click), `comment`, `comments`.
+`zoom_out`, `fit`, `fit_width`, `point` (the click), `drag`, `release`,
+`clear`, `comment`, `comments`.
 
  vim:tw=78:ts=8:ft=help:norl:

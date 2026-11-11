@@ -39,6 +39,9 @@ M.config = {
     fit = { '0' },
     fit_width = { 'w' },
     point = { '<LeftMouse>' },
+    drag = { '<LeftDrag>' },
+    release = { '<LeftRelease>' },
+    clear = { '<Esc>' },
     comment = { 'c' },
     comments = { 'C' },
   },
@@ -211,6 +214,11 @@ local function send(png, box, before)
 end
 
 local function status(st)
+  if st.selected then
+    local t = vim.fn.strcharpart(st.selected, 0, 50)
+    return vim.api.nvim_echo({ { string.format('selected "%s%s": c comments on it, <Esc> lets go', t,
+      t == st.selected and '' or '…') } }, false, {})
+  end
   local zoom = math.abs(st.zoom - 1) < 0.01 and '' or string.format('  %d%%', st.zoom * 100)
   local notes = (st.notes or 0) > 0 and string.format('  %d comment%s', st.notes, st.notes > 1 and 's' or '') or ''
   vim.api.nvim_echo({ { string.format('page %d/%d%s%s', st.page + 1, st.count or 0, zoom, notes) } }, false, {})
@@ -222,6 +230,12 @@ end
 -- What each window shows, from its last whole frame on: its page, scale,
 -- offset in pixels (py), where its scroll is going (target), and its cells.
 local shown = {}
+
+-- selected(st): the text selected on the page shown, as render takes it.
+local function selected(st)
+  local s = st.select
+  return s and s.page == st.page and { a = s.a, b = s.b } or nil
+end
 
 local function draw(win, clear, scale)
   if not vim.api.nvim_win_is_valid(win) then
@@ -247,7 +261,7 @@ local function draw(win, clear, scale)
   shown[win] = nil
   request({
     id = win, file = st.file, page = st.page, zoom = st.zoom,
-    x = st.x, y = st.y, out = png, width = cols * cpx, height = rows * rpx,
+    x = st.x, y = st.y, out = png, width = cols * cpx, height = rows * rpx, select = selected(st),
   }, function(r)
     if r.error then
       return vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
@@ -261,6 +275,7 @@ local function draw(win, clear, scale)
       now.x, now.y, now.zoom = r.x, r.y, r.zoom
     end
     now.count, now.mx, now.my, now.vw, now.vh, now.notes = r.count, r.mx, r.my, r.vw, r.vh, r.notes
+    now.selected = r.selected
     vim.b[buf].pdf = now
     local w = math.min(cols, math.ceil(r.iw / cpx))
     local h = math.min(rows, math.ceil(r.ih / rpx))
@@ -275,7 +290,7 @@ local function draw(win, clear, scale)
     end
     shown[win] = {
       file = st.file, page = st.page, scale = r.scale, px = r.px, py = r.py, pxh = r.pxh,
-      iw = r.iw, rows = rows, cpx = cpx, rpx = rpx, box = box, png = png,
+      iw = r.iw, rows = rows, cpx = cpx, rpx = rpx, box = box, png = png, select = selected(st),
       -- only a sharp frame filling the window's height scrolls by rows
       rolls = scale == M.config.scale and h == rows and r.ih == rows * rpx,
     }
@@ -358,7 +373,7 @@ local function pump(win)
   local h = math.abs(d) * sh.rpx
   request({
     id = win, file = sh.file, page = sh.page, scale = sh.scale,
-    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png,
+    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png, select = sh.select,
   }, function(r)
     if shown[win] ~= sh then
       return
@@ -453,16 +468,29 @@ local function text(content)
   return lines
 end
 
--- spot(st, page): where a new comment on page goes: the spot clicked on it,
--- else the top left of what the window shows of it, else of the page.
-local function spot(st, page)
-  local p = st.point
-  if p and p.page == page then
-    return p.x, p.y
+-- place(st, page): where a new comment on page goes, as apply's add takes it:
+-- on the text selected on it, else at the spot clicked on it, else the top
+-- left of what the window shows of it, else of the page.
+local function place(st, page)
+  local s, p = st.select, st.point
+  if s and s.page == page then
+    return { x = s.a.x, y = s.a.y, select = { a = s.a, b = s.b } }
+  elseif p and p.page == page then
+    return { x = p.x, y = p.y }
   elseif page == st.page then
-    return st.x + 10, st.y + 10
+    return { x = st.x + 10, y = st.y + 10 }
   end
-  return 20, 20
+  return { x = 20, y = 20 }
+end
+
+-- forget(buf): let go of the spot and text marked in buf's PDF.
+local function forget(buf)
+  local st = vim.b[buf].pdf
+  if st and (st.point or st.select) then
+    st.point, st.select, st.selected = nil, nil, nil
+    vim.b[buf].pdf = st
+    M.redraw()
+  end
 end
 
 -- fill(lbuf, comments): show comments in the list buffer lbuf.
@@ -550,8 +578,7 @@ local function save(lbuf)
   local changes, seen = {}, {}
   local function add(e)
     local page = e.page or st.page or 0
-    local x, y = spot(st, page)
-    changes[#changes + 1] = { ['do'] = 'add', page = page, x = x, y = y, content = e.content }
+    changes[#changes + 1] = vim.tbl_extend('force', place(st, page), { ['do'] = 'add', page = page, content = e.content })
   end
   for _, e in ipairs(entries(vim.api.nvim_buf_get_lines(lbuf, 0, -1, false))) do
     local old = e.id and not seen[e.id] and l.shown[e.id]
@@ -573,6 +600,7 @@ local function save(lbuf)
       changes[#changes + 1] = { ['do'] = 'delete', id = id }
     end
   end
+  forget(l.pdf)
   change(l.file, changes, lbuf)
 end
 
@@ -631,36 +659,62 @@ function M.comments()
   vim.wo[win][0].wrap, vim.wo[win][0].linebreak = true, true
 end
 
--- comment(): add a comment on the page shown, at the spot clicked if any.
+-- comment(): add a comment on the page shown: on the text selected, at the
+-- spot clicked, or at the top left of what shows.
 function M.comment()
   local buf = vim.api.nvim_get_current_buf()
   local st = vim.b.pdf
-  vim.ui.input({ prompt = string.format('comment on page %d: ', st.page + 1) }, function(t)
+  local on = selected(st) and st.selected
+  local prompt = on and string.format('comment on "%s": ', vim.fn.strcharpart(on, 0, 30))
+    or string.format('comment on page %d: ', st.page + 1)
+  vim.ui.input({ prompt = prompt }, function(t)
     if not t or vim.trim(t) == '' then
       return
     end
-    local x, y = spot(st, st.page)
-    local now = vim.b[buf].pdf
-    now.point = nil
-    vim.b[buf].pdf = now
-    change(st.file, { { ['do'] = 'add', page = st.page, x = x, y = y, content = t } })
+    local add = vim.tbl_extend('force', place(st, st.page), { ['do'] = 'add', page = st.page, content = t })
+    forget(buf)
+    change(st.file, { add })
   end)
 end
 
--- point(): mark the spot under the mouse, for the next comment.
-function M.point()
-  local sh, st, m = shown[vim.api.nvim_get_current_win()], vim.b.pdf, vim.fn.getmousepos()
+-- at(m, clamp): the point on the current window's page under the mouse m (a
+-- getmousepos()), nil off the page unless clamp brings it onto it.
+local function at(m, clamp)
+  local sh = m and shown[vim.api.nvim_get_current_win()]
   if not sh then
     return
   end
   local b = sh.box
   local c, r = m.screencol - b.col, m.screenrow - b.row
-  if c < 0 or r < 0 or c >= b.w or r >= b.h then
+  if clamp then
+    c, r = math.max(0, math.min(c, b.w - 1)), math.max(0, math.min(r, b.h - 1))
+  elseif c < 0 or r < 0 or c >= b.w or r >= b.h then
     return
   end
-  st.point = { page = sh.page, x = (sh.px + (c + 0.5) * sh.cpx) / sh.scale, y = (sh.py + (r + 0.5) * sh.rpx) / sh.scale }
-  vim.b.pdf = st
-  vim.api.nvim_echo({ { 'pdf.nvim: spot marked, c comments there' } }, false, {})
+  return { page = sh.page, x = (sh.px + (c + 0.5) * sh.cpx) / sh.scale, y = (sh.py + (r + 0.5) * sh.rpx) / sh.scale }
+end
+
+-- point(m): a click: mark the spot, for the next comment, and where a drag
+-- selecting text starts.
+function M.point(m)
+  forget(vim.api.nvim_get_current_buf())
+  local p = at(m)
+  if p then
+    local st = vim.b.pdf
+    st.point = p
+    vim.b.pdf = st
+    vim.api.nvim_echo({ { 'pdf.nvim: spot marked: c comments there, a drag selects text' } }, false, {})
+  end
+end
+
+-- drag(m): select the text from the spot clicked to the mouse.
+function M.drag(m)
+  local st, p = vim.b.pdf, at(m, true)
+  if st.point and p and p.page == st.point.page then
+    st.select = { page = p.page, a = st.point, b = p }
+    vim.b.pdf = st
+    M.redraw()
+  end
 end
 
 local function scroller(dx, dy, step)
@@ -687,7 +741,10 @@ local actions = {
   zoom_out = function() M.zoom(M.config.zoom ^ -vim.v.count1) end,
   fit = function() M.zoom() end,
   fit_width = function() M.fit_width() end,
-  point = function() M.point() end,
+  point = function(m) M.point(m) end,
+  drag = function(m) M.drag(m) end,
+  release = function() end,
+  clear = function() forget(vim.api.nvim_get_current_buf()) end,
   comment = function() M.comment() end,
   comments = function() M.comments() end,
 }
@@ -722,11 +779,16 @@ end
 -- The actions that act on the window under the mouse, not the current one:
 -- their keys are mapped everywhere, and do what they did before elsewhere.
 -- pass: over a PDF too the key still does its own (a click goes to the
--- window), and the action after.
+-- window), and the action after. press: the button goes down, so held ones
+-- (a drag, until release) go to that window wherever the mouse is.
 M.mouse_actions = {
   wheel_down = {}, wheel_up = {}, wheel_left = {}, wheel_right = {},
-  point = { pass = true },
+  point = { pass = true, press = true },
+  drag = { held = true },
+  release = { held = true, release = true },
 }
+
+local held -- the PDF window the button went down in, until it comes up
 
 local mouse_mapped = false
 
@@ -738,16 +800,25 @@ local function map_mouse()
   for action in pairs(M.mouse_actions) do
     for _, key in ipairs(M.config.keys[action] or {}) do
       vim.keymap.set({ 'n', 'v', 'i' }, key, function()
-        local win = vim.fn.getmousepos().winid
-        if win == 0 or not vim.b[vim.api.nvim_win_get_buf(win)].pdf then
+        local spec, m = M.mouse_actions[action], vim.fn.getmousepos()
+        local win = m.winid
+        if spec.held then
+          win = held
+          held = not spec.release and held or nil
+          if not win then
+            return key
+          end
+        elseif win == 0 or not vim.b[vim.api.nvim_win_get_buf(win)].pdf then
           return key
+        elseif spec.press then
+          held = win
         end
         vim.schedule(function()
           if vim.api.nvim_win_is_valid(win) then
-            vim.api.nvim_win_call(win, actions[action])
+            vim.api.nvim_win_call(win, function() actions[action](m) end)
           end
         end)
-        return M.mouse_actions[action].pass and key or ''
+        return spec.pass and key or ''
       end, { expr = true, replace_keycodes = true, desc = 'pdf.nvim: ' .. action .. ' under the mouse' })
     end
   end
