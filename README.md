@@ -40,7 +40,8 @@ Plug 'ajccosta/pdf.nvim'
 | `zw`                                | fit the page's width                    |
 | `zp`                                | fit the whole page                      |
 | click                               | move the cursor there                   |
-| click a comment                     | show its text                           |
+| click a note, or a comment's text beside the page | edit it                   |
+| double-click a highlight            | edit its comment                        |
 | `c`                                 | comment on the text selected or at the cursor; on a comment, edit it |
 | `x`                                 | delete the comment under the cursor     |
 | `Esc`                               | let go of the selection                 |
@@ -59,12 +60,14 @@ gives an empty window beside it for notes.
 Comments are the PDF's own notes (annotations), saved in the file, so Preview,
 Skim and Acrobat show them too, and they show here on the page. Press `c` to
 add one at the cursor, or select text first (`v`, or a drag) to comment on it:
-it shows selected while you type, and is saved highlighted. `c` on a comment
-edits it instead, and `x` deletes it. Each comment's text shows
+it shows selected while you write, and is saved highlighted. The comment
+opens in a buffer below the PDF, written as any text in Vim: `:w` saves it in
+the PDF, `:q` closes it, and written empty it is deleted. `c` on a comment, a
+click on a note or on a comment's text beside the page, or a double-click on a
+highlight opens it there to edit; `x` deletes it. Each comment's text shows
 beside the page, as text in the window, on the row of what it is on and
 joined to it by a line, on whichever side it fits best, in the room the page leaves (zoomed in,
-it may leave none; fitting the width, the page stays taller than the window); `m` hides or shows them. Click a comment, or its
-text, to read all of it.
+it may leave none; fitting the width, the page stays taller than the window); `m` hides or shows them.
 Skim shows the text of comments from other programs only after File > Convert
 Notes, which moves them out of the PDF. `C` (or `:PdfComments`) opens the list of them,
 edited like a file:

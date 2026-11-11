@@ -47,7 +47,7 @@
 # "color": "#rrggbb" (optional)} (with "select" as render takes it, a
 # highlight of that text, else a note),
 # {"do": "set", "id", "content"} or {"do": "delete", "id"}: saves them into
-# the PDF, then replies as comments does.
+# the PDF, then replies as comments does, with "added": the new ones' ids.
 import getpass
 import json
 import os
@@ -471,10 +471,17 @@ def covers(p, a, pt):
 
 
 def at(r):
-    _, doc = document(r["file"])
+    mtime, doc = document(r["file"])
     p = doc[int(r["page"])]
     pt = fitz.Point(float(r["x"]), float(r["y"]))
     hits = [a for a in p.annots() if is_comment(a) and covers(p, a, pt)]
+    t = page_text(r["file"], mtime, p)
+    if not hits and t.chars:
+        # beside a character, in the gap between lines: on it
+        c = t.chars[t.nearest(r)][0]
+        if pt.distance_to(c) < (c.y1 - c.y0) / 2:
+            mid = fitz.Point((c.x0 + c.x1) / 2, (c.y0 + c.y1) / 2)
+            hits = [a for a in p.annots() if is_comment(a) and covers(p, a, mid)]
     return dict(comment=describe(p, hits[-1]) if hits else None)
 
 
@@ -487,7 +494,9 @@ def find(doc, xref):
 
 
 def change(doc, changes):
+    """Make changes; the ids of the comments added."""
     file = doc.name
+    added = []
     for c in changes:
         if c["do"] == "add":
             p = doc[int(c["page"])]
@@ -510,6 +519,7 @@ def change(doc, changes):
             a.update()
             # its own name: PyMuPDF's start again with each opening
             doc.xref_set_key(a.xref, "NM", fitz.get_pdf_str(str(uuid.uuid4())))
+            added.append(a.xref)
         elif c["do"] == "set":
             _, a = find(doc, int(c["id"]))
             a.set_info(content=c["content"])
@@ -517,13 +527,14 @@ def change(doc, changes):
         elif c["do"] == "delete":
             p, a = find(doc, int(c["id"]))
             p.delete_annot(a)
+    return added
 
 
 def apply(r):
     file = r["file"]
     _, doc = document(file)
     try:
-        change(doc, r["changes"])
+        added = change(doc, r["changes"])
     except Exception:
         docs.pop(file, None)  # not half the changes in the next save
         raise
@@ -534,7 +545,7 @@ def apply(r):
         doc.save(tmp, garbage=1, deflate=True)
         os.replace(tmp, file)
     docs.pop(file, None)
-    return comments(r)
+    return dict(comments(r), added=added)
 
 
 ops = dict(render=render, comments=comments, at=at, apply=apply, move=move)

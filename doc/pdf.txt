@@ -33,12 +33,14 @@ In a PDF's window:
   `+` `=` `-`                       zoom in / out
   `zw`                            fit the page's width (what a PDF opens with)
   `zp`                            fit the whole page
-  click                         move the cursor there; on a comment, or its
-                                text beside the page, show it
+  click                         move the cursor there; on a note, or on a
+                                comment's text beside the page, edit it
+  double-click                  on a highlight, edit its comment
   drag                          select the text from there to the mouse
   `c`                             comment on the text selected; else, on a
                                 comment, edit it; else comment at the cursor,
-                                else at the top left of what shows
+                                else at the top left of what shows; in a
+                                buffer below the page, see |pdf.nvim-comments|
   `x`                             delete the comment under the cursor
   <Esc>                         let go of the selection
   `C`                             open or close the comments list
@@ -79,18 +81,21 @@ them; the page takes the room back. Zoomed in, they get only the room the
 page leaves them, and hide when that is under `notes_min_width` columns;
 fitting the width, only what leaves the page taller than the window, so it
 still scrolls by rows.
-A PDF without comments keeps all of the window. Click a comment's text to
-see all of it in the message line. The text's colour is `PdfNote`.
+A PDF without comments keeps all of the window. The text's colour is
+`PdfNote`.
 
 Select text (`v` and a motion, or a drag; it shows inverted, and the message
 line has it), then `c` comments on it: the comment is saved as a highlight of
 that text, with the comment as its note. Without a selection `c` comments at
-the cursor; a click on a comment shows its text. New comments get the colour
-|:PdfColor| chose.
+the cursor. New comments get the colour |:PdfColor| chose.
 
-`c` with the cursor on a comment (or after a click on its text beside the
-page) edits it in the command line: `\n` in it is a new line, and emptied it
-is deleted. `x` deletes it, once confirmed.
+A comment is written in a buffer of its own below the PDF, as any text: `:w`
+saves it into the PDF, `:q` closes it, and written empty it is deleted. A new
+one starts in Insert mode. `c` with the cursor on a comment edits it there;
+so does a click on a note, or on a comment's text beside the page, and a
+double-click on a highlight (a single click on one moves the cursor and shows
+its text in the message line). `x` deletes the comment under the cursor,
+once confirmed.
 
 Skim draws comments from other programs but shows their text only once they
 are its own: File > Convert Notes. That moves them out of the PDF into Skim's
@@ -174,6 +179,7 @@ hints. <CR> on a comment shows it in the PDF's window.
     wheel = 0.05,         -- a wheel tick a twentieth (at least a row)
     zoom = 1.25,          -- each zoom step
     comments_width = 40,  -- the comments list's window
+    editor_height = 8,    -- at most this many lines for a comment's buffer
     notes_width = 40,     -- columns beside the page (each side) for its
                           -- comments' text; 0: none
     notes_min_width = 12, -- zoomed in, less room than this: no text
@@ -189,7 +195,8 @@ The actions in `keys`: `next`, `prev`; the motions `left`, `right`, `down`,
 `visual_lines`, `yank`, `scroll_down`, `scroll_up`, `half_down`, `half_up`,
 `scroll_left`, `scroll_right`, `wheel_down`, `wheel_up`, `wheel_left`,
 `wheel_right`, `zoom_in`, `zoom_out`, `fit`, `fit_width`, `point` (the
-click), `drag`, `release`, `clear`, `comment`, `delete`, `comments`,
+click), `drag`, `release`, `edit_click` (the double-click), `clear`,
+`comment`, `delete`, `comments`,
 `margin`.
 
  vim:tw=78:ts=8:ft=help:norl:

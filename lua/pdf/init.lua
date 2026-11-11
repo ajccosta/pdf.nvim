@@ -26,6 +26,7 @@ M.config = {
   wheel = 0.05, -- and a wheel tick this much
   zoom = 1.25, -- a zoom in or out multiplies by this
   comments_width = 40, -- the comments list's window, in columns
+  editor_height = 8, -- at most this many lines for a comment being edited
   notes_width = 40, -- columns each side of the page for its comments; 0: none
   notes_min_width = 12, -- zoomed in, fewer than this left beside the page: none
   -- new comments' colour: a name from colors or "#rrggbb"; see :PdfColor
@@ -71,7 +72,8 @@ M.config = {
     fit_width = { 'zw' },
     point = { '<LeftMouse>' },
     drag = { '<LeftDrag>' },
-    release = { '<LeftRelease>' },
+    release = { '<LeftRelease>', '<2-LeftRelease>' },
+    edit_click = { '<2-LeftMouse>' },
     clear = { '<Esc>' },
     comment = { 'c' },
     delete = { 'x' },
@@ -525,7 +527,7 @@ local function notes(win)
   table.sort(pages)
   for _, n in ipairs(pages) do
     for _, m in ipairs(sh.pages[n].marks) do
-      found[#found + 1] = vim.tbl_extend('force', m, { top = sh.pages[n].top })
+      found[#found + 1] = vim.tbl_extend('force', m, { top = sh.pages[n].top, page = n })
     end
   end
   for _, m in ipairs(found) do
@@ -923,9 +925,10 @@ local function buf_win(buf)
   end
 end
 
--- change(file, changes, lbuf): save changes into file, then show what it has
--- in its lists (lbuf's even when modified: they are its changes) and pages.
-local function change(file, changes, lbuf)
+-- change(file, changes, lbuf, cb): save changes into file, then show what it
+-- has in its lists (lbuf's even when modified: they are its changes) and
+-- pages, then cb with apply's reply.
+local function change(file, changes, lbuf, cb)
   if #changes == 0 then
     if lbuf then
       vim.bo[lbuf].modified = false
@@ -939,6 +942,9 @@ local function change(file, changes, lbuf)
       end
     end
     M.redraw()
+    if cb then
+      cb(r)
+    end
   end)
 end
 
@@ -1043,41 +1049,113 @@ local function under(st, cb)
   op({ op = 'at', file = st.file, page = c.page, x = c.x, y = c.y }, function(r) cb(r.comment) end)
 end
 
+local editors = {} -- buffer: the comment it edits, { pdf, file, id, add }
+
+local function editor_name(file, id)
+  return string.format('pdf-comment://%s#%s', vim.fn.fnamemodify(file, ':t'), id)
+end
+
+-- write_comment(ebuf): the editor's text into its comment: a new one (add,
+-- apply's add for it) the first time, none when empty.
+local function write_comment(ebuf)
+  local e = editors[ebuf]
+  local t = vim.trim(table.concat(vim.api.nvim_buf_get_lines(ebuf, 0, -1, false), '\n'))
+  local c
+  if e.id then
+    c = t == '' and { ['do'] = 'delete', id = e.id } or { ['do'] = 'set', id = e.id, content = t }
+  elseif t ~= '' then
+    c = vim.tbl_extend('force', e.add, { content = t })
+  else
+    vim.bo[ebuf].modified = false
+    return
+  end
+  if c['do'] == 'add' then
+    forget(e.pdf) -- the text it is on, shown selected until now
+  end
+  change(e.file, { c }, nil, function(r)
+    if not vim.api.nvim_buf_is_valid(ebuf) then
+      return
+    end
+    vim.bo[ebuf].modified = false
+    if c['do'] == 'delete' then
+      -- what is written next is a new one where it was
+      e.id = nil
+      vim.notify('pdf.nvim: comment deleted')
+    elseif c['do'] == 'add' then
+      e.id = r.added and r.added[1]
+      if e.id then
+        vim.api.nvim_buf_set_name(ebuf, editor_name(e.file, e.id))
+      end
+    end
+  end)
+end
+
+-- edit(buf, c, add): edit comment c of buf's PDF ({ id, content, page }), or
+-- a new one (add: apply's add for it), in a buffer below the PDF, as text:
+-- :w saves it into the PDF, empty deletes it.
+local function edit(buf, c, add)
+  local st = vim.b[buf].pdf
+  for b, e in pairs(editors) do
+    if e.file == st.file and c and e.id == c.id and vim.api.nvim_buf_is_valid(b) then
+      local win = buf_win(b)
+      if win then
+        return vim.api.nvim_set_current_win(win)
+      end
+      vim.api.nvim_buf_delete(b, { force = true })
+    end
+  end
+  local ebuf = vim.api.nvim_create_buf(false, false)
+  editors[ebuf] = { pdf = buf, file = st.file, id = c and c.id, add = add }
+  local page = (c and c.page or add and add.page or st.page) + 1
+  vim.api.nvim_buf_set_name(ebuf, editor_name(st.file, c and c.id or ('new' .. ebuf)))
+  local bo = vim.bo[ebuf]
+  bo.buftype, bo.swapfile, bo.bufhidden, bo.filetype = 'acwrite', false, 'wipe', 'pdfcomment'
+  local lines = c and text(c.content) or {}
+  vim.api.nvim_buf_set_lines(ebuf, 0, -1, false, #lines > 0 and lines or { '' })
+  bo.modified = false
+  vim.api.nvim_create_autocmd('BufWriteCmd', { buffer = ebuf, callback = function() write_comment(ebuf) end })
+  vim.api.nvim_create_autocmd('BufWipeout', { buffer = ebuf, callback = function() editors[ebuf] = nil end })
+  local height = math.max(3, math.min(M.config.editor_height, #lines + 1))
+  local win = vim.api.nvim_open_win(ebuf, true, { split = 'below', win = buf_win(buf) or 0, height = height })
+  local wo = vim.wo[win][0]
+  wo.wrap, wo.linebreak = true, true
+  wo.winbar = string.format(' %s on page %d: :w saves it in the PDF, :q closes; empty, :w deletes it',
+    c and 'comment' or 'new comment', page)
+  if c then
+    forget(buf)
+  end
+  -- after the mouse's actions, run in the PDF's window, give it back
+  vim.schedule(function()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_set_current_win(win)
+      if not c then
+        vim.cmd.startinsert()
+      end
+    end
+  end)
+end
+
 -- comment(): on the text selected, a new comment; else edit the comment
--- under the cursor (its lines apart by \n; none left deletes it), or add one
--- at the cursor, or at the top left of what shows.
+-- under the cursor, or a new one at the cursor, or at the top left of what
+-- shows.
 function M.comment()
   local buf = vim.api.nvim_get_current_buf()
   local st = vim.b.pdf
-  local on = selected(st) and st.selected
-  local function add()
-    local prompt = on and string.format('comment on "%s": ', vim.fn.strcharpart(on, 0, 30))
-      or string.format('comment on page %d: ', st.page + 1)
-    vim.ui.input({ prompt = prompt }, function(t)
-      if not t or vim.trim(t) == '' then
-        return
-      end
-      local new = new_comment(st, st.page, t)
-      forget(buf)
-      change(st.file, { new })
-    end)
-  end
-  if on then
-    return add()
+  if selected(st) and st.selected then
+    return edit(buf, nil, new_comment(st, st.page, ''))
   end
   under(st, function(c)
-    if not c then
-      return add()
+    edit(buf, c, not c and new_comment(st, st.page, '') or nil)
+  end)
+end
+
+-- edit_click(m): a double click: edit the comment under the mouse.
+function M.edit_click()
+  local st = vim.b.pdf
+  under(st, function(c)
+    if c then
+      edit(vim.api.nvim_get_current_buf(), c)
     end
-    local old = table.concat(text(c.content), '\\n')
-    vim.ui.input({ prompt = 'edit comment (\\n: a new line; empty deletes it): ', default = old }, function(t)
-      if not t or t == old then
-        return
-      end
-      t = vim.trim(t:gsub('\\n', '\n'))
-      forget(buf)
-      change(st.file, { t == '' and { ['do'] = 'delete', id = c.id } or { ['do'] = 'set', id = c.id, content = t } })
-    end)
   end)
 end
 
@@ -1122,7 +1200,7 @@ local function show_comment(c)
   if vim.fn.strdisplaywidth(msg) > room then
     msg = vim.fn.strcharpart(msg, 0, room - 1) .. '…'
   end
-  vim.api.nvim_echo({ { c and 'comment (c edits, x deletes): ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } },
+  vim.api.nvim_echo({ { c and 'comment (c or a double click edits, x deletes): ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } },
     false, {})
 end
 
@@ -1138,9 +1216,9 @@ function M.point(m)
     local side = sh and m.screencol < sh.box.col and 'left' or 'right'
     local c = sh and sh.noted and sh.noted[side][m.winrow - 1]
     if c then
-      st.note = { id = c.id, content = c.content }
+      st.note = { id = c.id, content = c.content, page = c.page }
       vim.b.pdf = st
-      show_comment(c)
+      edit(buf, st.note)
     end
     return
   end
@@ -1148,6 +1226,10 @@ function M.point(m)
   vim.b.pdf = st
   M.redraw()
   op({ op = 'at', file = st.file, page = p.page, x = p.x, y = p.y }, function(r)
+    -- a note's icon is for its text; a highlight's text, to select too
+    if r.comment and r.comment.type == 'Text' then
+      return edit(buf, r.comment)
+    end
     show_comment(r.comment)
   end)
 end
@@ -1296,6 +1378,7 @@ local actions = {
   visual = function() M.visual(false) end,
   visual_lines = function() M.visual(true) end,
   yank = function() M.yank() end,
+  edit_click = function() M.edit_click() end,
   scroll_down = scroller(0, 1, 'scroll'),
   scroll_up = scroller(0, -1, 'scroll'),
   half_down = scroller(0, 1, 'half'),
@@ -1364,6 +1447,7 @@ M.mouse_actions = {
   point = { pass = true, press = true },
   drag = { held = true },
   release = { held = true, release = true },
+  edit_click = { press = true },
 }
 
 local held -- the PDF window the button went down in, until it comes up
