@@ -307,7 +307,8 @@ local function op(req, cb, always)
   end)
 end
 
--- send(png, box, before): draw png in box's cells, after the escapes before.
+-- send(png, box, before): draw png in box's cells, after the escapes before;
+-- one synchronized update, so rows before moves show only with png in them.
 local function send(png, box, before)
   local f = io.open(png, 'rb')
   if not f then
@@ -316,7 +317,7 @@ local function send(png, box, before)
   local data = vim.base64.encode(f:read('*a'))
   f:close()
   vim.api.nvim_ui_send(string.format(
-    '\0277%s\027[%d;%dH\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\007\0278',
+    '\027[?2026h\0277%s\027[%d;%dH\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\007\0278\027[?2026l',
     before or '', box.row, box.col, box.w, box.h, data))
 end
 
