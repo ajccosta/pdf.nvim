@@ -32,6 +32,7 @@ Plug 'ajccosta/pdf.nvim'
 | `+` `=` `-`                         | zoom in / out                           |
 | `w`                                 | fit the page's width                    |
 | `0`                                 | fit the whole page                      |
+| click a comment                     | show its text                           |
 | click, then `c`                     | comment on that spot                    |
 | drag, then `c`                      | comment on the text selected            |
 | `Esc`                               | let go of the selection                 |
@@ -47,7 +48,9 @@ gives an empty window beside it for notes.
 Comments are the PDF's own notes (annotations), saved in the file, so Preview,
 Skim and Acrobat show them too, and they show here on the page. Click a spot
 and press `c` to add one, or drag over text first to comment on it: it shows
-selected while you type, and is saved highlighted. `C` (or `:PdfComments`) opens the list of them,
+selected while you type, and is saved highlighted. Click a comment to read it.
+Skim shows the text of comments from other programs only after File > Convert
+Notes, which moves them out of the PDF. `C` (or `:PdfComments`) opens the list of them,
 edited like a file:
 
 ```

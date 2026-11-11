@@ -130,7 +130,7 @@ local renderer = { proc = nil, out = '', busy = {}, pending = {}, callbacks = {}
 local send_request
 
 local function on_reply(line)
-  local ok, r = pcall(vim.json.decode, line)
+  local ok, r = pcall(vim.json.decode, line, { luanil = { object = true, array = true } })
   if not ok then
     return
   end
@@ -487,9 +487,12 @@ end
 local function forget(buf)
   local st = vim.b[buf].pdf
   if st and (st.point or st.select) then
+    local drawn = st.select
     st.point, st.select, st.selected = nil, nil, nil
     vim.b[buf].pdf = st
-    M.redraw()
+    if drawn then
+      M.redraw()
+    end
   end
 end
 
@@ -699,12 +702,22 @@ end
 function M.point(m)
   forget(vim.api.nvim_get_current_buf())
   local p = at(m)
-  if p then
-    local st = vim.b.pdf
-    st.point = p
-    vim.b.pdf = st
-    vim.api.nvim_echo({ { 'pdf.nvim: spot marked: c comments there, a drag selects text' } }, false, {})
+  if not p then
+    return
   end
+  local st = vim.b.pdf
+  st.point = p
+  vim.b.pdf = st
+  -- on a comment, its text; else what the spot is for
+  op({ op = 'at', file = st.file, page = p.page, x = p.x, y = p.y }, function(r)
+    local c = r.comment
+    local msg = c and table.concat(text(c.content), ' / ') or 'spot marked: c comments there, a drag selects text'
+    local room = vim.v.echospace - 12
+    if vim.fn.strdisplaywidth(msg) > room then
+      msg = vim.fn.strcharpart(msg, 0, room - 1) .. '…'
+    end
+    vim.api.nvim_echo({ { c and 'comment: ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } }, false, {})
+  end)
 end
 
 -- drag(m): select the text from the spot clicked to the mouse.

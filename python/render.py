@@ -24,6 +24,9 @@
 # comments: {"file"}: {"comments": the document's comments, each {"id", "page",
 # "type", "content", "rect" (in points)}}.
 #
+# at: {"file", "page", "x", "y"}: {"comment": the one there, as comments has
+# it, or null}.
+#
 # apply: {"file", "changes"}, each {"do": "add", "page", "x", "y", "content"}
 # (with "select" as render takes it, a highlight of that text, else a note),
 # {"do": "set", "id", "content"} or {"do": "delete", "id"}: saves them into
@@ -139,15 +142,30 @@ def is_comment(a):
     return a.type[0] in (fitz.PDF_ANNOT_TEXT, fitz.PDF_ANNOT_FREE_TEXT) or bool(a.info.get("content"))
 
 
+def describe(p, a):
+    return dict(id=a.xref, page=p.number, type=a.type[1], content=a.info.get("content", ""),
+                rect=list(a.rect * p.rotation_matrix))
+
+
 def comments(r):
     _, doc = document(r["file"])
-    found = []
-    for p in doc:
-        for a in p.annots():
-            if is_comment(a):
-                found.append(dict(id=a.xref, page=p.number, type=a.type[1], content=a.info.get("content", ""),
-                                  rect=list(a.rect * p.rotation_matrix)))
-    return dict(comments=found)
+    return dict(comments=[describe(p, a) for p in doc for a in p.annots() if is_comment(a)])
+
+
+def covers(p, a, pt):
+    """Whether a shows at pt: on a highlight's text, not just its box."""
+    v = a.vertices
+    if a.type[0] == fitz.PDF_ANNOT_HIGHLIGHT and v and len(v) % 4 == 0:
+        return any(pt in fitz.Quad(v[i:i + 4]).rect * p.rotation_matrix for i in range(0, len(v), 4))
+    return pt in a.rect * p.rotation_matrix
+
+
+def at(r):
+    _, doc = document(r["file"])
+    p = doc[int(r["page"])]
+    pt = fitz.Point(float(r["x"]), float(r["y"]))
+    hits = [a for a in p.annots() if is_comment(a) and covers(p, a, pt)]
+    return dict(comment=describe(p, hits[-1]) if hits else None)
 
 
 def find(doc, xref):
@@ -166,6 +184,9 @@ def change(doc, changes):
             quads = c.get("select") and selection(file, os.stat(file).st_mtime, p, c["select"])[2]
             if quads:
                 a = p.add_highlight_annot(quads)
+                # where readers that open a note in a popup (Preview) show it
+                x = max(0, min(a.rect.x1, p.rect.x1 - 200))
+                a.set_popup(fitz.Rect(x, a.rect.y0, x + 200, a.rect.y0 + 100))
             else:
                 # x, y are where it shows; the note's point is on the unrotated page
                 at = fitz.Point(float(c["x"]), float(c["y"])) * p.derotation_matrix
@@ -201,7 +222,7 @@ def apply(r):
     return comments(r)
 
 
-ops = dict(render=render, comments=comments, apply=apply)
+ops = dict(render=render, comments=comments, at=at, apply=apply)
 
 for line in sys.stdin:
     r = json.loads(line)
