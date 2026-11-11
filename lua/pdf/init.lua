@@ -74,6 +74,7 @@ M.config = {
     release = { '<LeftRelease>' },
     clear = { '<Esc>' },
     comment = { 'c' },
+    delete = { 'x' },
     comments = { 'C' },
     margin = { 'm' },
   },
@@ -853,9 +854,9 @@ end
 -- forget(buf): let go of the text selected in buf's PDF.
 local function forget(buf)
   local st = vim.b[buf].pdf
-  if st and (st.visual or st.selected) then
+  if st and (st.visual or st.selected or st.note) then
     local drawn = st.visual
-    st.visual, st.selected = nil, nil
+    st.visual, st.selected, st.note = nil, nil, nil
     vim.b[buf].pdf = st
     if drawn then
       M.redraw()
@@ -1029,21 +1030,70 @@ function M.comments()
   vim.wo[win][0].wrap, vim.wo[win][0].linebreak = true, true
 end
 
--- comment(): add a comment on the page shown: on the text selected, at the
--- cursor, or at the top left of what shows.
+-- under(st, cb): cb with the comment under the cursor, or the one clicked
+-- beside the page ({ id, content }); nil when none.
+local function under(st, cb)
+  if st.note then
+    return cb(st.note)
+  end
+  local c = st.cursor
+  if not c then
+    return cb(nil)
+  end
+  op({ op = 'at', file = st.file, page = c.page, x = c.x, y = c.y }, function(r) cb(r.comment) end)
+end
+
+-- comment(): on the text selected, a new comment; else edit the comment
+-- under the cursor (its lines apart by \n; none left deletes it), or add one
+-- at the cursor, or at the top left of what shows.
 function M.comment()
   local buf = vim.api.nvim_get_current_buf()
   local st = vim.b.pdf
   local on = selected(st) and st.selected
-  local prompt = on and string.format('comment on "%s": ', vim.fn.strcharpart(on, 0, 30))
-    or string.format('comment on page %d: ', st.page + 1)
-  vim.ui.input({ prompt = prompt }, function(t)
-    if not t or vim.trim(t) == '' then
-      return
+  local function add()
+    local prompt = on and string.format('comment on "%s": ', vim.fn.strcharpart(on, 0, 30))
+      or string.format('comment on page %d: ', st.page + 1)
+    vim.ui.input({ prompt = prompt }, function(t)
+      if not t or vim.trim(t) == '' then
+        return
+      end
+      local new = new_comment(st, st.page, t)
+      forget(buf)
+      change(st.file, { new })
+    end)
+  end
+  if on then
+    return add()
+  end
+  under(st, function(c)
+    if not c then
+      return add()
     end
-    local add = new_comment(st, st.page, t)
-    forget(buf)
-    change(st.file, { add })
+    local old = table.concat(text(c.content), '\\n')
+    vim.ui.input({ prompt = 'edit comment (\\n: a new line; empty deletes it): ', default = old }, function(t)
+      if not t or t == old then
+        return
+      end
+      t = vim.trim(t:gsub('\\n', '\n'))
+      forget(buf)
+      change(st.file, { t == '' and { ['do'] = 'delete', id = c.id } or { ['do'] = 'set', id = c.id, content = t } })
+    end)
+  end)
+end
+
+-- delete(): delete the comment under the cursor, once confirmed.
+function M.delete()
+  local buf = vim.api.nvim_get_current_buf()
+  local st = vim.b.pdf
+  under(st, function(c)
+    if not c then
+      return vim.notify('pdf.nvim: no comment under the cursor')
+    end
+    local t = vim.fn.strcharpart(table.concat(text(c.content), ' / '), 0, 40)
+    if vim.fn.confirm(string.format('Delete comment "%s"?', t), '&Yes\n&No', 2) == 1 then
+      forget(buf)
+      change(st.file, { { ['do'] = 'delete', id = c.id } })
+    end
   end)
 end
 
@@ -1068,11 +1118,12 @@ end
 -- show_comment(c): c's text in the message line, or what a click is for.
 local function show_comment(c)
   local msg = c and table.concat(text(c.content), ' / ') or 'c comments here, a drag or v selects text'
-  local room = vim.v.echospace - 12
+  local room = vim.v.echospace - 30
   if vim.fn.strdisplaywidth(msg) > room then
     msg = vim.fn.strcharpart(msg, 0, room - 1) .. '…'
   end
-  vim.api.nvim_echo({ { c and 'comment: ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } }, false, {})
+  vim.api.nvim_echo({ { c and 'comment (c edits, x deletes): ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } },
+    false, {})
 end
 
 -- point(m): a click: the cursor goes there, where a drag selecting text
@@ -1086,7 +1137,12 @@ function M.point(m)
     local sh = shown[m.winid]
     local side = sh and m.screencol < sh.box.col and 'left' or 'right'
     local c = sh and sh.noted and sh.noted[side][m.winrow - 1]
-    return c and show_comment(c)
+    if c then
+      st.note = { id = c.id, content = c.content }
+      vim.b.pdf = st
+      show_comment(c)
+    end
+    return
   end
   st.cursor, st.want = p, nil
   vim.b.pdf = st
@@ -1180,7 +1236,7 @@ function M.move(motion, count)
       return
     end
     local now = vim.b[buf].pdf
-    now.cursor, now.want = { page = r.page, x = r.x, y = r.y }, r.want
+    now.cursor, now.want, now.note = { page = r.page, x = r.x, y = r.y }, r.want, nil
     if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buf then
       follow(win, now, r)
     end
@@ -1259,6 +1315,7 @@ local actions = {
   release = function() end,
   clear = function() forget(vim.api.nvim_get_current_buf()) end,
   comment = function() M.comment() end,
+  delete = function() M.delete() end,
   comments = function() M.comments() end,
   margin = function() M.margin() end,
 }

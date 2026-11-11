@@ -41,7 +41,8 @@ Plug 'ajccosta/pdf.nvim'
 | `zp`                                | fit the whole page                      |
 | click                               | move the cursor there                   |
 | click a comment                     | show its text                           |
-| `c`                                 | comment on the text selected or at the cursor |
+| `c`                                 | comment on the text selected or at the cursor; on a comment, edit it |
+| `x`                                 | delete the comment under the cursor     |
 | `Esc`                               | let go of the selection                 |
 | `C`                                 | the comments list, beside the page      |
 | `m`                                 | hide or show the comments beside it     |
@@ -58,7 +59,8 @@ gives an empty window beside it for notes.
 Comments are the PDF's own notes (annotations), saved in the file, so Preview,
 Skim and Acrobat show them too, and they show here on the page. Press `c` to
 add one at the cursor, or select text first (`v`, or a drag) to comment on it:
-it shows selected while you type, and is saved highlighted. Each comment's text shows
+it shows selected while you type, and is saved highlighted. `c` on a comment
+edits it instead, and `x` deletes it. Each comment's text shows
 beside the page, as text in the window, on the row of what it is on and
 joined to it by a line, on whichever side it fits best, in the room the page leaves (zoomed in,
 it may leave none; fitting the width, the page stays taller than the window); `m` hides or shows them. Click a comment, or its

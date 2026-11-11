@@ -36,8 +36,10 @@ In a PDF's window:
   click                         move the cursor there; on a comment, or its
                                 text beside the page, show it
   drag                          select the text from there to the mouse
-  `c`                             comment on the text selected, else at the
-                                cursor, else the top left of what shows
+  `c`                             comment on the text selected; else, on a
+                                comment, edit it; else comment at the cursor,
+                                else at the top left of what shows
+  `x`                             delete the comment under the cursor
   <Esc>                         let go of the selection
   `C`                             open or close the comments list
   `m`                             hide or show the comments beside the page
@@ -86,6 +88,9 @@ that text, with the comment as its note. Without a selection `c` comments at
 the cursor; a click on a comment shows its text. New comments get the colour
 |:PdfColor| chose.
 
+`c` with the cursor on a comment (or after a click on its text beside the
+page) edits it in the command line: `\n` in it is a new line, and emptied it
+is deleted. `x` deletes it, once confirmed.
 
 Skim draws comments from other programs but shows their text only once they
 are its own: File > Convert Notes. That moves them out of the PDF into Skim's
@@ -184,6 +189,7 @@ The actions in `keys`: `next`, `prev`; the motions `left`, `right`, `down`,
 `visual_lines`, `yank`, `scroll_down`, `scroll_up`, `half_down`, `half_up`,
 `scroll_left`, `scroll_right`, `wheel_down`, `wheel_up`, `wheel_left`,
 `wheel_right`, `zoom_in`, `zoom_out`, `fit`, `fit_width`, `point` (the
-click), `drag`, `release`, `clear`, `comment`, `comments`, `margin`.
+click), `drag`, `release`, `clear`, `comment`, `delete`, `comments`,
+`margin`.
 
  vim:tw=78:ts=8:ft=help:norl:
