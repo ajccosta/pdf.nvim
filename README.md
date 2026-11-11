@@ -23,6 +23,11 @@ With vim-plug:
 Plug 'ajccosta/pdf.nvim'
 ```
 
+To open PDFs from Finder in it (macOS, iTerm): `macos/make-app.sh` makes
+`~/Applications/pdf.nvim.app`, which opens each PDF in nvim in a new iTerm
+tab. To make it the default: a PDF's Get Info in Finder, Open with: pdf.nvim,
+Change All.
+
 ## Keys
 
 | Keys                                | Does                                    |
