@@ -53,6 +53,17 @@ M.config = {
     paragraph_prev = { '{' },
     first = { 'gg' },
     last = { 'G' },
+    screen_top = { 'H' },
+    screen_middle = { 'M' },
+    screen_bottom = { 'L' },
+    find = { 'f' },
+    find_back = { 'F' },
+    till = { 't' },
+    till_back = { 'T' },
+    find_next = { ';' },
+    find_prev = { ',' },
+    jump_back = { '<C-o>' },
+    jump_forward = { '<C-i>', '<Tab>' },
     visual = { 'v' },
     visual_lines = { 'V' },
     yank = { 'y' },
@@ -1250,8 +1261,12 @@ end
 M.motions = {
   left = 'h', right = 'l', down = 'j', up = 'k', word = 'w', word_end = 'e', word_back = 'b',
   line_start = '0', line_text = '^', line_end = '$', paragraph_next = '}', paragraph_prev = '{',
-  first = 'gg', last = 'G',
+  first = 'gg', last = 'G', screen_top = 'H', screen_middle = 'M', screen_bottom = 'L',
 }
+
+-- The motions that are jumps: where the cursor was goes in the jump list
+-- (CTRL-O, CTRL-I), as in Vim.
+M.jumps = { gg = true, G = true, ['{'] = true, ['}'] = true, H = true, M = true, L = true }
 
 -- in_view(win, c): whether the window shows c, a spot on its pages.
 local function in_view(win, c)
@@ -1292,25 +1307,66 @@ end
 
 local moving = {} -- buffer: the motions waiting for the one out
 
--- move(motion): move the current PDF's cursor as Vim's motion (M.motions)
--- moves it; from the top left of what shows when the cursor is not on it.
--- In v, on the page it started on.
-function M.move(motion, count)
+-- jumped(st): put st's cursor in its jump list, after where CTRL-O has gone
+-- back to (what was on from there goes, as with jumpoptions=stack).
+local function jumped(st)
+  local c = st.cursor
+  if not c then
+    return
+  end
+  local list = st.jumps or {}
+  list = vim.list_slice(list, 1, (st.jump or #list + 1) - 1)
+  local last = list[#list]
+  if not (last and last.page == c.page and last.x == c.x and last.y == c.y) then
+    list[#list + 1] = { page = c.page, x = c.x, y = c.y }
+  end
+  st.jumps, st.jump = vim.list_slice(list, math.max(1, #list - 99)), nil
+end
+
+-- screen_row(win, which): the spot at the top (H), middle (M) or bottom (L)
+-- of what the window shows, on its left.
+local function screen_row(win, which)
+  local sh = shown[win]
+  if not sh then
+    return
+  end
+  local b = sh.box
+  local row = which == 'H' and 0 or which == 'M' and math.floor(b.h / 2) or b.h - 1
+  local page, y = page_at(sh, sh.py + (row + 0.5) * sh.rpx)
+  return { page = page, x = sh.px / sh.scale, y = y }
+end
+
+-- move(motion, count, o): move the current PDF's cursor as Vim's motion
+-- (M.motions) moves it; from the top left of what shows when the cursor is
+-- not on it. In v, on the page it started on. o: { char } for f F t T, with
+-- again for ; and ,; { from } a spot to go to (here) instead.
+function M.move(motion, count, o)
+  o = o or {}
   local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
   local q = moving[buf]
   if q then
-    return table.insert(q, { motion, count })
+    return table.insert(q, { motion, count, o })
   end
   local st = vim.b.pdf
-  local from = st.cursor
-  if not in_view(win, from) then
+  if M.jumps[motion] then
+    jumped(st)
+    vim.b.pdf = st
+  end
+  local from = o.from or st.cursor
+  if motion:match('^[HML]$') then
+    from, motion = screen_row(win, motion), 'here'
+  elseif not o.from and not in_view(win, from) then
     from = { page = st.page, x = st.x, y = st.y }
     motion = motion:match('^[hljkwbe0^$]$') and 'here' or motion
+  end
+  if not from then
+    return
   end
   moving[buf] = {}
   op({
     op = 'move', file = st.file, page = from.page, x = from.x, y = from.y, motion = motion, count = count,
     want = st.cursor == from and st.want or nil, stay = st.visual and true or nil,
+    char = o.char, again = o.again,
   }, function(r)
     local queued = moving[buf] or {}
     moving[buf] = nil
@@ -1334,6 +1390,48 @@ function M.move(motion, count)
       M.redraw()
     end
   end, true)
+end
+
+-- jump(n): back n places in the jump list (forward with n < 0), as CTRL-O
+-- and CTRL-I.
+function M.jump(n)
+  local st = vim.b.pdf
+  if not st.jump then
+    -- from the end: here too, for CTRL-I to come back to
+    jumped(st)
+    st.jump = #(st.jumps or {})
+  end
+  local to = st.jump - n
+  local spot = st.jumps[to]
+  if not spot then
+    vim.b.pdf = st
+    return
+  end
+  st.jump = to
+  vim.b.pdf = st
+  M.move('here', 0, { from = spot })
+end
+
+local last_find -- { motion, char }: the last f, F, t or T, for ; and ,
+local reverse = { f = 'F', F = 'f', t = 'T', T = 't' }
+
+-- find(motion): f, F, t or T: to the character typed next on the line.
+function M.find(motion)
+  local count = vim.v.count
+  local ok, ch = pcall(vim.fn.getcharstr)
+  if not ok or ch == '\27' then
+    return
+  end
+  last_find = { motion, ch }
+  M.move(motion, count, { char = ch })
+end
+
+-- find_again(back): ; (the last f, F, t or T again) or , (the other way).
+function M.find_again(back)
+  if last_find then
+    local motion = back and reverse[last_find[1]] or last_find[1]
+    M.move(motion, vim.v.count, { char = last_find[2], again = true })
+  end
 end
 
 -- visual(lines): start selecting text from the cursor (whole lines with
@@ -1378,6 +1476,14 @@ local actions = {
   visual = function() M.visual(false) end,
   visual_lines = function() M.visual(true) end,
   yank = function() M.yank() end,
+  find = function() M.find('f') end,
+  find_back = function() M.find('F') end,
+  till = function() M.find('t') end,
+  till_back = function() M.find('T') end,
+  find_next = function() M.find_again(false) end,
+  find_prev = function() M.find_again(true) end,
+  jump_back = function() M.jump(vim.v.count1) end,
+  jump_forward = function() M.jump(-vim.v.count1) end,
   edit_click = function() M.edit_click() end,
   scroll_down = scroller(0, 1, 'scroll'),
   scroll_up = scroller(0, -1, 'scroll'),

@@ -20,6 +20,11 @@ In a PDF's window:
   `0` `^` `$` <Home> <End>          to the line's start, its text, its end
   `{` `}`                           to the paragraph's start, the next one's
   `gg` `G`                          first / last page; `{count}G` page {count}
+  `f` `F` `t` `T` {char}              to {char} on the line, or just before it
+  `;` `,`                           the last `f` `F` `t` `T` again, or the other way
+  `H` `M` `L`                         to the top / middle / bottom of the window
+  CTRL-O CTRL-I <Tab>           back / forward in the jump list: where `gg`,
+                                `G`, `{`, `}`, `H`, `M` and `L` left from
   `v` `V`                           select from the cursor (`V`: whole lines);
                                 again, or <Esc>, lets go
   `y`                             copy the text selected into the register
@@ -191,7 +196,9 @@ hints. <CR> on a comment shows it in the PDF's window.
 <
 The actions in `keys`: `next`, `prev`; the motions `left`, `right`, `down`,
 `up`, `word`, `word_end`, `word_back`, `line_start`, `line_text`, `line_end`,
-`paragraph_next`, `paragraph_prev`, `first`, `last`; `visual`,
+`paragraph_next`, `paragraph_prev`, `first`, `last`, `screen_top`,
+`screen_middle`, `screen_bottom`, `find`, `find_back`, `till`, `till_back`,
+`find_next`, `find_prev`; `jump_back`, `jump_forward`; `visual`,
 `visual_lines`, `yank`, `scroll_down`, `scroll_up`, `half_down`, `half_up`,
 `scroll_left`, `scroll_right`, `wheel_down`, `wheel_up`, `wheel_left`,
 `wheel_right`, `zoom_in`, `zoom_out`, `fit`, `fit_width`, `point` (the

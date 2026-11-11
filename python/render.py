@@ -148,8 +148,9 @@ def kind(c):
 
 def move(r):
     """Where the cursor at ("page", "x", "y") goes by "motion" ("count"
-    times), as Vim moves it over text: h l j k w b e 0 ^ $ { } gg G, or here
-    (the character there). j and k keep to the column "want"; "stay" keeps it
+    times), as Vim moves it over text: h l j k w b e 0 ^ $ { } gg G, f F t T
+    (to "char" on the line; "again" for ; and , past a t's char next to it),
+    or here (the character there). j and k keep to the column "want"; "stay" keeps it
     on its page. Reply: {"page", "x", "y" (the character's middle), "want",
     "x0", "y0", "x1", "y1" (its box)}, all in points; or {"page": null} when
     the document has no text."""
@@ -212,6 +213,20 @@ def move(r):
         if which == "$":
             return n, b - 1
         return n, next((k for k in range(a, b) if kind(t.chars[k][2])), a)
+
+    def find(pos, motion, ch):
+        """f F t T: the next ch on the line, or the character before it."""
+        n, i = pos
+        t = text(n)
+        a, b = t.lines[t.chars[i][3]]
+        d = 1 if motion in ("f", "t") else -1
+        till = motion in ("t", "T")
+        k = i + d * (2 if till and r.get("again") else 1)
+        while a <= k < b:
+            if t.chars[k][2] == ch:
+                return n, k - d if till else k
+            k += d
+        return pos
 
     def to_line(pos, d, want):
         n, i = pos
@@ -284,6 +299,11 @@ def move(r):
                 pos = in_line(pos, motion)
             elif motion in ("{", "}"):
                 pos = paragraph(pos, -1 if motion == "{" else 1)
+            elif motion in ("f", "F", "t", "T"):
+                q = find(pos, motion, r["char"])
+                if q == pos:
+                    break
+                pos = q
     rc = text(pos[0]).chars[pos[1]][0]
     if motion not in ("j", "k"):
         want = None

@@ -30,6 +30,9 @@ Plug 'ajccosta/pdf.nvim'
 | `h` `j` `k` `l` arrows              | move the cursor over the page's text    |
 | `w` `b` `e` `0` `^` `$` `{` `}`     | and the rest of Vim's motions           |
 | `gg` `G`                            | first / last page (`3G`: page 3)        |
+| `f` `F` `t` `T` `;` `,`             | to a character on the line, and again   |
+| `H` `M` `L`                         | to the top / middle / bottom of the window |
+| CTRL-O CTRL-I (Tab)                 | back / forward to where a jump left from |
 | `v` `V`, or a drag                  | select text (`V`: whole lines)          |
 | `y`                                 | copy the text selected (`"+y`: clipboard) |
 | CTRL-E CTRL-Y, wheel                | scroll down / up, on into the next page |
