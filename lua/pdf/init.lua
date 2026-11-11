@@ -12,6 +12,10 @@ M.config = {
   -- scroll by having the terminal move the page up or down whole rows and
   -- drawing only the rows that come in: sharp all along, and little to send
   smooth = true,
+  -- zoomed in or fitting the width, scroll on from one page into the next,
+  -- gap rows apart, instead of jumping to it
+  continuous = true,
+  gap = 1,
   view = 'width', -- a PDF opens fitting its width; 1 fits the whole page
   split_empty = true, -- a split of a PDF's window (CTRL-W v) starts empty
   -- where the page sits when it is smaller than the window: across (left,
@@ -241,10 +245,29 @@ end
 -- offset in pixels (py), where its scroll is going (target), and its cells.
 local shown = {}
 
--- selected(st): the text selected on the page shown, as render takes it.
+-- selected(st): the text selected, as render takes it.
 local function selected(st)
   local s = st.select
-  return s and s.page == st.page and { a = s.a, b = s.b } or nil
+  return s and { page = s.page, a = s.a, b = s.b } or nil
+end
+
+-- continuous(st): whether st's pages show stacked, one on from the other.
+local function continuous(st)
+  return M.config.continuous and st.zoom ~= 1
+end
+
+-- page_at(sh, py): the page at sh's pixel row py, and where in it in points.
+local function page_at(sh, py)
+  local page = sh.page
+  if sh.tops then
+    for i, top in ipairs(sh.tops) do
+      if top > py then
+        break
+      end
+      page = i - 1
+    end
+  end
+  return page, (py - (sh.tops and sh.tops[page + 1] or 0)) / sh.scale
 end
 
 -- text(content): a comment's text as the list has it, its lines trimmed.
@@ -375,7 +398,7 @@ local function beside(win, side, col, width)
   return buf
 end
 
--- notes(win): the comments on win's page as text beside it, each on the row
+-- notes(win): the comments on the pages win shows as text beside them, each on the row
 -- of where it is (or below the one before on its side), a line in its colour
 -- from there. Laid out as on the right, then mirrored for the left.
 local function notes(win)
@@ -416,9 +439,17 @@ local function notes(win)
     sh.noted[side][row] = m or sh.noted[side][row]
   end
   local below = { left = 0, right = 0 }
-  for _, m in ipairs(sh.marks or {}) do
+  local found = {} -- the comments of the pages shown, top to bottom
+  local pages = vim.tbl_keys(sh.pages)
+  table.sort(pages)
+  for _, n in ipairs(pages) do
+    for _, m in ipairs(sh.pages[n].marks) do
+      found[#found + 1] = vim.tbl_extend('force', m, { top = sh.pages[n].top })
+    end
+  end
+  for _, m in ipairs(found) do
     local side, from = m.side, past[m.side]
-    local row = first + math.floor((m.y * sh.scale - sh.py) / sh.rpx)
+    local row = first + math.floor((m.top + m.y * sh.scale - sh.py) / sh.rpx)
     if row >= first and row < first + b.h then
       local hl = 'PdfNote' .. m.color:sub(2)
       vim.api.nvim_set_hl(0, hl, { fg = m.color })
@@ -471,12 +502,17 @@ local function draw(win, clear, scale)
   end
   vim.fn.mkdir(cache, 'p')
   local png = string.format('%s/%d-%d.png', cache, vim.fn.getpid(), win)
+  -- the gap between pages: the window's background
+  local bg = vim.api.nvim_get_hl(0, { name = 'Normal', link = false }).bg
+  local stack = continuous(st) and {
+    continuous = true, gap = math.floor(M.config.gap * rpx + 0.5), bg = string.format('#%06x', bg or 0),
+  } or {}
   shown[win] = nil
-  request({
+  request(vim.tbl_extend('force', {
     id = win, file = st.file, page = st.page, zoom = st.zoom,
     x = st.x, y = st.y, out = png, width = cols * cpx, height = rows * rpx, select = selected(st),
     links = links and vim.tbl_extend('force', links, { row = rpx }),
-  }, function(r)
+  }, stack), function(r)
     if r.error then
       return vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
     end
@@ -493,7 +529,7 @@ local function draw(win, clear, scale)
     end
     -- what the renderer kept on the page, unless the state moved on meanwhile
     if now.page == st.page and now.x == st.x and now.y == st.y and now.zoom == st.zoom then
-      now.x, now.y, now.zoom = r.x, r.y, r.zoom
+      now.page, now.x, now.y, now.zoom = r.page, r.x, r.y, r.zoom
     end
     now.count, now.mx, now.my, now.vw, now.vh, now.notes = r.count, r.mx, r.my, r.vw, r.vh, r.notes
     now.selected = r.selected
@@ -510,12 +546,18 @@ local function draw(win, clear, scale)
       status(now)
     end
     shown[win] = {
-      file = st.file, page = st.page, scale = r.scale, px = r.px, py = r.py, pxh = r.pxh,
+      file = st.file, page = r.page, scale = r.scale, px = r.px, py = r.py, pxh = r.pxh, tops = r.tops,
       iw = r.iw, rows = rows, cpx = cpx, rpx = rpx, box = box, png = png, select = selected(st),
-      margin = notes_cols, marks = r.marks, links = links and vim.tbl_extend('force', links, { row = rpx }),
-      -- only a sharp frame filling the window's height scrolls by rows
-      rolls = scale == M.config.scale and h == rows and r.ih == rows * rpx,
+      margin = notes_cols, pages = {}, stack = stack,
+      links = links and vim.tbl_extend('force', links, { row = rpx }),
+      -- only a sharp frame filling the height of a window as wide as the
+      -- screen scrolls by rows: whole lines move
+      rolls = scale == M.config.scale and h == rows and r.ih == rows * rpx
+        and info.wincol == 1 and info.width == vim.o.columns,
     }
+    for _, g in ipairs(r.pages) do
+      shown[win].pages[g.page] = g
+    end
     notes(win)
     if clear or not vim.deep_equal(vim.w[win].pdf_box, box) then
       vim.w[win].pdf_box = box
@@ -564,18 +606,15 @@ function M.go(n)
   end)
 end
 
--- roll(sh, d): the escapes that move sh's image d rows up (down when d < 0)
--- inside its cells, leaving the rest of the screen be.
+-- roll(sh, d): the escapes that move sh's rows d up (down when d < 0), image
+-- and all. Whole lines: iTerm2 loses the images in cells it moves inside
+-- left and right margins.
 local function roll(sh, d)
   local b = sh.box
-  local margins = b.col > 1 or b.col + b.w - 1 < vim.o.columns
   return table.concat({
-    margins and '\027[?69h' or '',
     string.format('\027[%d;%dr', b.row, b.row + b.h - 1),
-    margins and string.format('\027[%d;%ds', b.col, b.col + b.w - 1) or '',
     string.format('\027[%d;%dH', b.row, b.col),
     d > 0 and string.format('\027[%dS', d) or string.format('\027[%dT', -d),
-    margins and '\027[?69l' or '',
     '\027[r',
   })
 end
@@ -594,10 +633,10 @@ local function pump(win)
   sh.busy = true
   local py = d > 0 and sh.py + sh.rows * sh.rpx or sh.target
   local h = math.abs(d) * sh.rpx
-  request({
+  request(vim.tbl_extend('force', {
     id = win, file = sh.file, page = sh.page, scale = sh.scale,
     px = sh.px, py = py, width = sh.iw, height = h, out = sh.png, select = sh.select, links = sh.links,
-  }, function(r)
+  }, sh.stack), function(r)
     if shown[win] ~= sh then
       return
     end
@@ -605,11 +644,20 @@ local function pump(win)
     if r.error or r.py ~= py or r.ih ~= h or r.iw ~= sh.iw then
       return draw(win, false, M.config.scale)
     end
+    -- the comments' text moves with the lines too, where nvim does not know:
+    -- gone from the screen first, to draw it again where it goes
+    for _, f in pairs(sides[win] or {}) do
+      vim.api.nvim_buf_clear_namespace(vim.api.nvim_win_get_buf(f), ns, 0, -1)
+    end
+    vim.api.nvim__redraw({ flush = true })
     local b = sh.box
     send(sh.png, {
       row = d > 0 and b.row + b.h - d or b.row, col = b.col, w = b.w, h = math.abs(d),
     }, roll(sh, d))
     sh.py = sh.py + d * sh.rpx
+    for _, g in ipairs(r.pages) do
+      sh.pages[g.page] = g
+    end
     notes(win)
     if vim.api.nvim_get_current_win() == win then
       status(vim.b.pdf)
@@ -632,21 +680,28 @@ local function roll_to(dy, step)
   end
   local rows = math.max(1, math.floor(math.abs(step) * sh.rows + 0.5))
   sh.target = math.max(0, math.min(from + dy * rows * sh.rpx, last))
-  st.y = sh.target / sh.scale
+  sh.page, st.y = page_at(sh, sh.target)
+  if st.page ~= sh.page then
+    local g = sh.pages[sh.page]
+    st.page, st.notes = sh.page, g and #g.marks or st.notes
+  end
   vim.b.pdf = st
   pump(win)
   return true
 end
 
 -- scroll(dx, dy, step): move by dx, dy steps of step of the window; past the
--- bottom or top of the page, on to the next or previous one.
+-- bottom or top of the page, on into the next or previous one.
 function M.scroll(dx, dy, step)
   if dx == 0 and dy ~= 0 and roll_to(dy, step) then
     return
   end
   update(function(st)
     st.x = st.x + dx * step * (st.vw or 0)
-    if dy > 0 and st.y >= (st.my or 0) and st.page + 1 < (st.count or 1) then
+    if continuous(st) then
+      -- the renderer keeps it in the document
+      st.y = math.min(st.y + dy * step * (st.vh or 0), st.my or 0)
+    elseif dy > 0 and st.y >= (st.my or 0) and st.page + 1 < (st.count or 1) then
       st.page, st.y = st.page + 1, 0
     elseif dy < 0 and st.y <= 0 and st.page > 0 then
       st.page, st.y = st.page - 1, 1e9
@@ -923,7 +978,8 @@ local function at(m, clamp)
   elseif c < 0 or r < 0 or c >= b.w or r >= b.h then
     return
   end
-  return { page = sh.page, x = (sh.px + (c + 0.5) * sh.cpx) / sh.scale, y = (sh.py + (r + 0.5) * sh.rpx) / sh.scale }
+  local page, y = page_at(sh, sh.py + (r + 0.5) * sh.rpx)
+  return { page = page, x = (sh.px + (c + 0.5) * sh.cpx) / sh.scale, y = y }
 end
 
 -- show_comment(c): c's text in the message line, or what a click is for.

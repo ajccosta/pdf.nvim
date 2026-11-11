@@ -4,7 +4,9 @@
 inline image protocol.
 
 Scrolling has the terminal move the page up or down whole rows and draws only
-the rows that come in, so it stays sharp and sends little. Pages are rendered
+the rows that come in, so it stays sharp and sends little. Zoomed in or fitting
+the width, the pages are stacked a row apart and scrolling runs on from one into
+the next. Pages are rendered
 by a Python process kept running, which cuts each part from the page it has
 drawn.
 
@@ -25,7 +27,7 @@ Plug 'ajccosta/pdf.nvim'
 
 | Keys                                | Does                                    |
 |-------------------------------------|-----------------------------------------|
-| `j` `k` Down Up, wheel              | scroll down / up, on to the next page   |
+| `j` `k` Down Up, wheel              | scroll down / up, on into the next page |
 | `h` `l` Left Right, sideways wheel  | scroll left / right                     |
 | `n` `p` Space BS PageDown PageUp    | next / previous page                    |
 | `gg` `G` Home End                   | first / last page                       |
@@ -76,6 +78,8 @@ require('pdf').setup({
   scale = 2,           -- render at twice the screen size (retina)
   view = 'width',      -- open fitting the page's width (1: the whole page)
   smooth = true,       -- scroll by rows, drawing only the new ones
+  continuous = true,   -- zoomed in: scroll on from page to page, no jump
+  gap = 1,             -- rows between pages scrolled through
   scroll = 0.2,        -- a scroll key moves a fifth of the window
   wheel = 0.05,        -- a wheel tick a twentieth (at least a row)
   zoom = 1.25,         -- each zoom step

@@ -14,8 +14,8 @@ inline image protocol. Needs Neovim 0.12+, iTerm2 and a `python3` with PyMuPDF
 
 In a PDF's window:
 
-  `j` `k` <Down> <Up>, wheel      scroll down / up, on to the next or previous
-                                page past its end
+  `j` `k` <Down> <Up>, wheel      scroll down / up, on into the next or
+                                previous page (see `continuous`)
   `h` `l` <Left> <Right>          scroll left / right
   `n` `p` <Space> <BS>            next / previous page
   <PageDown> <PageUp>
@@ -138,6 +138,10 @@ hints. <CR> on a comment shows it in the PDF's window.
     split_empty = true,   -- a split of a PDF's window starts empty
     smooth = true,        -- scroll by moving the page whole rows, drawing
                           -- only the rows that come in
+    continuous = true,    -- zoomed in or fitting the width, pages stacked
+                          -- and scrolled through without a jump; false:
+                          -- one page at a time
+    gap = 1,              -- rows between stacked pages
     position = { 'right', 'center' },  -- see :PdfPosition
     scroll = 0.2,         -- a scroll key moves a fifth of the window
     wheel = 0.05,         -- a wheel tick a twentieth (at least a row)

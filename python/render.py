@@ -9,22 +9,28 @@
 #   {"zoom", "x", "y"}: what a window that size shows. zoom 1 fits the whole
 #     page in it, "width" fits its width; at more, it shows the page from
 #     (x, y), in points from its top left corner;
-#   {"scale", "px", "py"}: the part of the page drawn at scale (pixels per
-#     point) from (px, py), in pixels.
-# Either way it writes a PNG at out, at most width x height. With "select"
-# {"a", "b"} ({"x", "y"} on the page, in points), the text from a to b shows
-# selected, and the reply's "selected" has it. The reply's "marks" are the
-# page's comments, top to bottom, each {"id", "y": just under it, "side": where
-# its text goes, "content", "color": "#rrggbb"}, and "commented" whether any
-# page has one. With "links": {"cols": the text's width, "row": a row's height
-# in pixels, "sides": ["left", "right"] or one}, each comment goes on the side
-# where its text sits nearest its row, a line from it to that edge of the page.
+#   {"scale", "px", "py"}: the part drawn at scale (pixels per point) from
+#     (px, py), in pixels.
+# With "continuous": true, the document's pages are stacked, "gap" pixels
+# apart in "bg" ("#rrggbb"), at the page's scale, and the view goes on into
+# the pages around it; py is then from the first page's top. Either way it
+# writes a PNG at out, at most width x height. With "select" {"page", "a",
+# "b"} ({"x", "y"} on that page, in points), the text from a to b shows
+# selected, and the reply's "selected" has it. With "links": {"cols": the
+# text's width, "row": a row's height in pixels, "sides": ["left", "right"] or
+# one}, each comment goes on the side where its text sits nearest its row, a
+# line from it to that edge of the page.
 #
-# The reply: {"id", "count" (pages), "iw", "ih" (the image's size), "x", "y"
-# (kept on the page), "mx", "my" (the most they can be), "vw", "vh" (the
-# window's size), "pw", "ph" (the page's), all in points, "zoom", "scale",
-# "px", "py", "pxw", "pxh" (the page's size in pixels), "notes" (comments on
-# the page)}.
+# The reply: {"id", "count" (pages), "page" (the one at the view's top), "iw",
+# "ih" (the image's size), "x", "y" (where in page the view starts, kept in
+# the document), "mx", "my" (the most they can be), "vw", "vh" (the window's
+# size), "pw", "ph" (page's size), all in points, "zoom", "scale", "px", "py",
+# "pxw", "pxh" (all that can show, in pixels), "tops" (continuous, at a zoom:
+# each page's top in pixels), "pages" (those the image shows, each {"page",
+# "top", "marks"}), "notes" (comments on page), "marks" (page's), "commented"
+# (whether any page has one)}. Marks are a page's comments, top to bottom,
+# each {"id", "y": just under it, in points, "side": where its text goes,
+# "content", "color": "#rrggbb"}.
 #
 # comments: {"file"}: {"comments": the document's comments, each {"id", "page",
 # "type", "content", "rect" (in points)}}.
@@ -170,6 +176,25 @@ def sides_of(found):
     return "".join(f[3][0] for f in found)
 
 
+def sizes(file, mtime, doc):
+    """Each page's rect, in points."""
+    return cached(sheets, (file, mtime, "sizes"), lambda: [q.rect for q in doc])
+
+
+def piece(r, mtime, p, scale, links, rect):
+    """The part rect (in p's pixels at scale) of p drawn, with its comments'
+    links, origin at rect's corner; and p's marks."""
+    found = marks(p, links, scale)
+    src = sheet(r["file"], mtime, p, found) if links else p
+    if p.rect.width * p.rect.height * scale * scale <= MAX_PIXELS:
+        page = whole_page(r["file"], mtime, p, links and sides_of(found), src, scale)
+        pix = fitz.Pixmap(fitz.csRGB, rect & page.irect, False)
+        pix.copy(page, pix.irect)
+    else:
+        pix = src.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=fitz.Rect(rect) / scale, alpha=False)
+    return pix, found
+
+
 def render(r):
     mtime, doc = document(r["file"])
     p = doc[max(0, min(int(r["page"]), doc.page_count - 1))]
@@ -183,38 +208,56 @@ def render(r):
         zoom = max(1, width / pw / fit) if r["zoom"] == "width" else float(r["zoom"])
         scale = fit * zoom
     links = r.get("links")
-    found = marks(p, links, scale)
-    src = sheet(r["file"], mtime, p, found) if links else p
-    whole = pw * ph * scale * scale <= MAX_PIXELS
-    page = whole_page(r["file"], mtime, p, links and sides_of(found), src, scale) if whole else None
-    pxw, pxh = (page.width, page.height) if whole else (round(pw * scale), round(ph * scale))
+    m = fitz.Matrix(scale, scale)
+    # the pages it may show, stacked gap pixels apart: py and the tops are
+    # from the first one's top
+    continuous = bool(r.get("continuous"))
+    shown = range(doc.page_count) if continuous else [p.number]
+    rects = sizes(r["file"], mtime, doc)
+    tops, top = {}, 0
+    for n in shown:
+        tops[n] = top
+        top += (rects[n] * m).irect.height + int(r.get("gap", 0))
+    pxh = top - int(r.get("gap", 0))
+    pxw = max((rects[n] * m).irect.width for n in shown)
     w, h = min(pxw, width), min(pxh, height)
     if "scale" in r:
         px, py = int(r["px"]), int(r["py"])
     else:
-        px, py = round(float(r["x"]) * scale), round(float(r["y"]) * scale)
+        px, py = round(float(r["x"]) * scale), tops[p.number] + round(float(r["y"]) * scale)
     px, py = max(0, min(px, pxw - w)), max(0, min(py, pxh - h))
-    rect = fitz.IRect(px, py, px + w, py + h)
-    if whole:
-        pix = fitz.Pixmap(fitz.csRGB, rect, False)
-        pix.copy(page, rect)
-        pix.set_origin(0, 0)
-    else:
-        pix = src.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=fitz.Rect(rect) / scale, alpha=False)
-    reply = {}
-    if r.get("select"):
-        text, rects, _ = selection(r["file"], mtime, p, r["select"])
-        for rc in rects:
-            box = (rc * scale).irect & fitz.IRect(0, 0, pxw, pxh)
-            box = fitz.IRect(box.x0 - px, box.y0 - py, box.x1 - px, box.y1 - py) & pix.irect
-            if not box.is_empty:
-                pix.invert_irect(box)
-        reply["selected"] = text
+    # filled from bytes: set_rect fills pixel by pixel in Python, seconds a view
+    bg = r.get("bg", "#000000")
+    pix = fitz.Pixmap(fitz.csRGB, w, h, bytes.fromhex(bg[1:]) * (w * h), False)
+    reply, pages = {}, []
+    sel = r.get("select")
+    for n in shown:
+        if tops[n] >= py + h or tops[n] + (rects[n] * m).irect.height <= py:
+            continue
+        q = doc[n]
+        part, found = piece(r, mtime, q, scale, links, fitz.IRect(px, py - tops[n], px + w, py - tops[n] + h))
+        if sel and sel.get("page", n) == n:
+            text, boxes, _ = selection(r["file"], mtime, q, sel)
+            for rc in boxes:
+                box = (rc * scale).irect & part.irect
+                if not box.is_empty:
+                    part.invert_irect(box)
+            reply["selected"] = text
+        part.set_origin(part.x - px, part.y + tops[n] - py)
+        pix.copy(part, part.irect)
+        pages.append(dict(page=n, top=tops[n], marks=[
+            dict(id=a.xref, y=first.y1 + 1, side=side, content=a.info.get("content", ""),
+                 color="#%02x%02x%02x" % tuple(round(c * 255) for c in color))
+            for a, first, color, side in found]))
     pix.save(r["out"])
-    found = [dict(id=a.xref, y=first.y1 + 1, side=side, content=a.info.get("content", ""),
-                  color="#%02x%02x%02x" % tuple(round(c * 255) for c in color)) for a, first, color, side in found]
-    return dict(reply, notes=len(found), marks=found, commented=has_comments(r["file"], mtime, doc), count=doc.page_count, iw=pix.width, ih=pix.height, x=px / scale, y=py / scale,
-                mx=(pxw - w) / scale, my=(pxh - h) / scale, vw=w / scale, vh=h / scale, pw=pw, ph=ph,
+    # the page at the view's top, and where in it
+    at = max((n for n in shown if tops[n] <= py), key=lambda n: tops[n])
+    reply["tops"] = [tops[n] for n in shown] if continuous and "scale" not in r else None
+    top = next((g for g in pages if g["page"] == at), dict(marks=[]))
+    return dict(reply, page=at, pages=pages, notes=len(top["marks"]), marks=top["marks"],
+                commented=has_comments(r["file"], mtime, doc), count=doc.page_count, iw=pix.width, ih=pix.height,
+                x=px / scale, y=(py - tops[at]) / scale, mx=(pxw - w) / scale, my=(pxh - h - tops[at]) / scale,
+                vw=w / scale, vh=h / scale, pw=rects[at].width, ph=rects[at].height,
                 zoom=zoom, scale=scale, px=px, py=py, pxw=pxw, pxh=pxh)
 
 
