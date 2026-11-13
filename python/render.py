@@ -22,8 +22,10 @@
 # They look as "look" says: {"visual": {"fg", "bg"}: selected text's ink and
 # paper, "cursor": {"fg", "bg", "shape": "block", "ver" or "hor", "size": of a
 # bar, in percent of the character}}, as Vim's Visual and Cursor and the
-# 'guicursor' shape. With "strip" {"row": a row's height in pixels, "keep":
-# [y0, y1] or null, the pixel rows marked before, as "marked" has them}, the
+# 'guicursor' shape; "search": {"fg", "bg", "pattern", "ignore"}: where
+# pattern matches (as matches() takes it), in Vim's Search colours. With
+# "strip" {"row": a row's height in pixels, "keep": [y0, y1] or null, the
+# pixel rows marked before, as "marked" has them}, the
 # image is only the whole rows of the view those and the ones marked now
 # cross, and the reply's "strip" [r0, r1] says which rows it is (null: none).
 # With "links": {"cols": the text's width, "row": a row's height in pixels,
@@ -79,6 +81,7 @@ pages = {}  # (file, mtime, page, links, scale): the whole page drawn
 sheets = {}  # (file, mtime, page): the page with its comments baked in, to draw
 texts = {}  # (file, mtime, page): its Text
 laid = {}  # (file, mtime, page, links, scale): its marks
+found = {}  # (file, mtime, page, pattern, ignore): where a search matches on it
 facts = {}  # (file, mtime, what): about the whole document, small
 MAX_PAGES = 16  # of each cache, the most recently used kept
 ahead = []  # what to draw next while idle: functions, the first first
@@ -145,6 +148,24 @@ class Text:
                 if len(self.chars) > first:
                     self.lines.append((first, len(self.chars)))
                     self.blocks.append(b["number"])
+
+    def flat(self):
+        """The page's text as one string, its lines joined as joined() joins
+        them, and which character each of its letters is (None: a space put
+        between lines)."""
+        if not hasattr(self, "string"):
+            out, owner = [], []
+            for a, b in self.lines:
+                first = next((c[2] for c in self.chars[a:b] if not c[2].isspace()), "")
+                if out and out[-1] == "-" and len(out) > 1 and out[-2].isalpha() and first[:1].islower():
+                    out.pop(), owner.pop()  # "sys-" "tems": systems
+                elif out:
+                    out.append(" "), owner.append(None)
+                for k in range(a, b):
+                    for ch in self.chars[k][2]:
+                        out.append(ch), owner.append(k)
+            self.string, self.owner = "".join(out), owner
+        return self.string, self.owner
 
     def nearest(self, pt):
         """The character at pt (a {"x", "y"}), else the one nearest it."""
@@ -294,6 +315,29 @@ def highlighted(file, mtime, p, a):
     return dict(text=joined(t, chosen), order=order)
 
 
+def matches(file, mtime, p, search):
+    """Where search ({"pattern": text, "ignore": case or not}) matches on p,
+    in reading order: each (first, past last) of its characters. The pattern
+    is plain text; a space in it matches any run of space or line break."""
+    key = (file, mtime, p.number, search["pattern"], bool(search.get("ignore")))
+
+    def make():
+        words = search["pattern"].split()
+        if not words:
+            return []
+        t = page_text(file, mtime, p)
+        string, owner = t.flat()
+        rx = re.compile(r"\s+".join(map(re.escape, words)), re.I if search.get("ignore") else 0)
+        out = []
+        for m in rx.finditer(string):
+            ks = [k for k in owner[m.start():m.end()] if k is not None]
+            if ks:
+                out.append((ks[0], ks[-1] + 1))
+        return out
+
+    return cached(found, key, make)
+
+
 def kind(c):
     """A character's class, as Vim's words have them: 0 blank, 1 a word's
     letters, 2 punctuation."""
@@ -304,7 +348,9 @@ def move(r):
     """Where the cursor at ("page", "x", "y") goes by "motion" ("count"
     times), as Vim moves it over text: h l j k w b e 0 ^ $ { } gg G, f F t T
     (to "char" on the line; "again" for ; and , past a t's char next to it),
-    or here (the character there). j and k keep to the column "want"; "stay" keeps it
+    / ? (to the next or last match of "search", as matches() takes it; "wrap"
+    round the document's end; {"page": null, "missing": true} if none), or
+    here (the character there). j and k keep to the column "want"; "stay" keeps it
     on its page. Reply: {"page", "x", "y" (the character's middle), "want",
     "x0", "y0", "x1", "y1" (its box)}, all in points; or {"page": null} when
     the document has no text."""
@@ -419,6 +465,25 @@ def move(r):
         tm = text(m)
         return m, tm.lines[0 if d > 0 else block_start(tm, len(tm.lines) - 1)][0]
 
+    def search(pos, d):
+        """/ (d 1) or ? (d -1): the next match's first character from pos,
+        round the end to the other (with "wrap", as 'wrapscan'); None if none."""
+        n, i = pos
+        for k in range(doc.page_count + 1):
+            m = n + d * k
+            if not 0 <= m < doc.page_count:
+                if not r.get("wrap"):
+                    return None
+                m %= doc.page_count
+            starts = [a for a, _ in matches(r["file"], mtime, doc[m], r["search"])]
+            if k == 0:
+                starts = [a for a in starts if (a > i if d > 0 else a < i)]
+            elif k == doc.page_count:
+                starts = [a for a in starts if (a <= i if d > 0 else a >= i)]
+            if starts:
+                return m, starts[0] if d > 0 else starts[-1]
+        return None
+
     motion, count = r["motion"], int(r.get("count") or 0)
     n = with_text(int(r["page"]), 1)
     if n is None:
@@ -457,6 +522,11 @@ def move(r):
                 q = find(pos, motion, r["char"])
                 if q == pos:
                     break
+                pos = q
+            elif motion in ("/", "?"):
+                q = search(pos, 1 if motion == "/" else -1)
+                if q is None:
+                    return dict(page=None, missing=True)
                 pos = q
     rc = text(pos[0]).chars[pos[1]][0]
     if motion not in ("j", "k"):
@@ -661,6 +731,16 @@ def render(r):
         q = doc[n]
         part, found = piece(r, mtime, q, scale, links, fitz.IRect(px, py - tops[n], px + w, py - tops[n] + h))
         look = r.get("look") or {}
+        if look.get("search"):
+            t = page_text(r["file"], mtime, q)
+            boxes = []
+            for a, b in matches(r["file"], mtime, q, look["search"]):
+                lines = {}
+                for k in range(a, b):
+                    c = t.chars[k]
+                    lines[c[3]] = lines[c[3]] | c[0] if c[3] in lines else c[0]
+                boxes += [rc * scale for rc in lines.values()]
+            shade(part, boxes, look["search"])
         if sel and sel.get("page", n) == n:
             text, boxes, _ = selection(r["file"], mtime, q, sel)
             shade(part, [rc * scale for rc in boxes], look.get("visual"))

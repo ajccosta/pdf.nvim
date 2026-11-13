@@ -19,7 +19,7 @@ K.motions = {
 
 -- The motions that are jumps: where the cursor was goes in the jump list
 -- (CTRL-O, CTRL-I), as in Vim.
-K.jumps = { gg = true, G = true, ['{'] = true, ['}'] = true, H = true, M = true, L = true }
+K.jumps = { gg = true, G = true, ['{'] = true, ['}'] = true, H = true, M = true, L = true, ['/'] = true, ['?'] = true }
 
 -- follow(win, st, r): scroll st so the window shows r, the cursor's box (as
 -- move replies), a tenth of the window in from its edge when it moves.
@@ -86,7 +86,7 @@ end
 -- (motions) moves it; from the top left of what shows when the cursor is
 -- not on it. In v, on the page it started on. o: { char } for f F t T, with
 -- again for ; and ,; { from } a spot to go to (here) instead; { done } to
--- call once it has moved.
+-- call once it has moved; { search } for / and ?, as view.search has it.
 function K.move(motion, count, o)
   o = o or {}
   local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
@@ -114,9 +114,16 @@ function K.move(motion, count, o)
     op = 'move', file = st.file, page = from.page, x = from.x, y = from.y, motion = motion, count = count,
     want = st.cursor == from and st.want or nil, stay = st.visual and true or nil,
     char = o.char, again = o.again,
+    search = o.search, wrap = o.search and vim.o.wrapscan or nil,
   }, function(r)
     local queued = moving[buf] or {}
     moving[buf] = nil
+    if r.missing then
+      -- no matches to show: the last ones gone
+      view.search_on = false
+      view.notice({ { 'E486: Pattern not found: ' .. o.search.pattern, 'ErrorMsg' } })
+      return vim.api.nvim_win_is_valid(win) and view.mark(win)
+    end
     if r.error or not vim.api.nvim_buf_is_valid(buf) or r.page == nil then
       return
     end
@@ -181,6 +188,52 @@ function K.find_again(back)
   if last_find then
     local motion = back and reverse[last_find[1]] or last_find[1]
     K.move(motion, vim.v.count, { char = last_find[2], again = true })
+  end
+end
+
+-- search(back): / (? with back): to the next match of the text typed then
+-- (the last search's when none), its matches shown until <Esc>. The text is
+-- plain, matched as 'ignorecase' and 'smartcase' say, or \c and \C in it.
+function K.search(back)
+  local count = vim.v.count1
+  local ok, typed = pcall(vim.fn.input, { prompt = back and '?' or '/', cancelreturn = false })
+  if not ok or typed == false then
+    return
+  end
+  local last = view.search
+  if typed == '' then
+    if not last then
+      return util.say({ { 'E35: No previous regular expression', 'ErrorMsg' } })
+    end
+    typed = last.pattern
+  end
+  local ignore = vim.o.ignorecase and not (vim.o.smartcase and typed:match('%u'))
+  if typed:match('\\c') then
+    ignore = true
+  elseif typed:match('\\C') then
+    ignore = false
+  end
+  local pattern = typed:gsub('\\[cC]', '')
+  view.search = { pattern = pattern, ignore = ignore, back = back }
+  K.search_again(false, count)
+end
+
+-- search_again(reverse, count): n (N with reverse): the last search again,
+-- the same way (the other), its matches shown again.
+function K.search_again(reverse, count)
+  local s = view.search
+  if not s then
+    return util.say({ { 'E35: No previous regular expression', 'ErrorMsg' } })
+  end
+  view.search_on = true
+  K.move((s.back ~= reverse) and '?' or '/', count or vim.v.count1, { search = { pattern = s.pattern, ignore = s.ignore } })
+end
+
+-- unsearch(): the search's matches hidden, as :nohlsearch.
+function K.unsearch()
+  if view.search_on then
+    view.search_on = false
+    view.mark()
   end
 end
 

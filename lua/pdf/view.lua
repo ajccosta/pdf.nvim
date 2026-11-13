@@ -5,7 +5,33 @@ local renderer = require('pdf.renderer')
 local util = require('pdf.util')
 local V = {}
 
+-- The last search (/ or ?), for n and N: { pattern, ignore (case), back };
+-- on while its matches show, until <Esc>, as 'hlsearch' shows them.
+V.search = nil
+V.search_on = false
+-- notice: a message ({ chunks } as util.say takes) shown instead of the
+-- status until the next key, so a redraw ending later keeps it
+local notice
+local notice_ns = vim.api.nvim_create_namespace('pdf.notice')
+
+function V.notice(chunks)
+  notice = chunks
+  util.say(chunks)
+  vim.on_key(function()
+    notice = nil
+    vim.on_key(nil, notice_ns)
+  end, notice_ns)
+end
+
+-- searching(): the search whose matches show, as render's look takes it.
+local function searching()
+  return V.search_on and vim.o.hlsearch and { pattern = V.search.pattern, ignore = V.search.ignore } or nil
+end
+
 local function status(st)
+  if notice then
+    return util.say(notice)
+  end
   if st.selected then
     local t = vim.fn.strcharpart(st.selected, 0, 50)
     return util.say({ { string.format('selected "%s%s": c comments on it, y copies it, <Esc> lets go', t,
@@ -13,7 +39,8 @@ local function status(st)
   end
   local zoom = math.abs(st.zoom - 1) < 0.01 and '' or string.format('  %d%%', st.zoom * 100)
   local notes = (st.notes or 0) > 0 and string.format('  %d comment%s', st.notes, st.notes > 1 and 's' or '') or ''
-  util.say({ { string.format('page %d/%d%s%s', st.page + 1, st.count or 0, zoom, notes) } })
+  local search = V.search_on and '  ' .. (V.search.back and '?' or '/') .. V.search.pattern or ''
+  util.say({ { string.format('page %d/%d%s%s%s', st.page + 1, st.count or 0, zoom, notes, search) } })
 end
 
 -- draw(win, clear, scale): render win's page and draw it. nvim's own redraw
@@ -45,10 +72,11 @@ local function colors(name)
   return { fg = fg, bg = bg }
 end
 
--- look(st): how the selection and the cursor look on the page, as render
--- takes it: as Vim's own, in the Visual and Cursor highlights (or Normal's
--- colours, reversed, where they have none), the cursor's shape as
--- 'guicursor' has it for Normal mode (Visual's while selecting).
+-- look(st): how the selection, the cursor and the search's matches look on
+-- the page, as render takes it: as Vim's own, in the Visual, Cursor and
+-- Search highlights (or Normal's colours, reversed, where they have none),
+-- the cursor's shape as 'guicursor' has it for Normal mode (Visual's while
+-- selecting).
 function V.look(st)
   local normal = colors('Normal')
   normal.fg, normal.bg = normal.fg or '#ffffff', normal.bg or '#000000'
@@ -71,9 +99,15 @@ function V.look(st)
   end
   local c = colors(group)
   cursor.fg, cursor.bg = c.bg and c.fg or normal.bg, c.bg or normal.fg
+  local search = searching()
+  if search then
+    local c = colors('Search')
+    search.fg, search.bg = c.fg or normal.fg, c.bg or normal.fg
+  end
   return {
     visual = { fg = visual.fg or normal.fg, bg = visual.bg or normal.fg },
     cursor = cursor,
+    search = search,
   }
 end
 
@@ -96,9 +130,10 @@ function V.page_at(sh, py)
   return page, (py - (sh.tops and sh.tops[page + 1] or 0)) / sh.scale
 end
 
--- at(st): where st's view is, to tell whether a frame still shows it.
+-- at(st): where st's view is, and the matches it shows, to tell whether a
+-- frame still shows it.
 local function at(st)
-  return { page = st.page, x = st.x, y = st.y, zoom = st.zoom }
+  return { page = st.page, x = st.x, y = st.y, zoom = st.zoom, search = searching() }
 end
 
 local function draw(win, clear, scale)

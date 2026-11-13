@@ -24,8 +24,15 @@ In a PDF's window:
   `f` `F` `t` `T` {char}              to {char} on the line, or just before it
   `;` `,`                           the last `f` `F` `t` `T` again, or the other way
   `H` `M` `L`                         to the top / middle / bottom of the window
+  `/` `?` {text}<CR>                to the next / previous {text}, on through the
+                                pages (around at the end with 'wrapscan');
+                                every match shows marked, with 'hlsearch'
+  `n` `N`                           while the matches show: the next / previous
+                                one; <Esc> hides them, and `n` is the next
+                                page again
   CTRL-O CTRL-I <Tab>           back / forward in the jump list: where `gg`,
-                                `G`, `{`, `}`, `H`, `M` and `L` left from
+                                `G`, `{`, `}`, `H`, `M`, `L`, `/` and `?` left
+                                from
   `v` `V`                           select from the cursor (`V`: whole lines);
                                 again, or <Esc>, lets go
   `y`                             copy the text selected into the register
@@ -245,7 +252,8 @@ The actions in `keys`: `next`, `prev`; the motions `left`, `right`, `down`,
 `up`, `word`, `word_end`, `word_back`, `line_start`, `line_text`, `line_end`,
 `paragraph_next`, `paragraph_prev`, `first`, `last`, `screen_top`,
 `screen_middle`, `screen_bottom`, `find`, `find_back`, `till`, `till_back`,
-`find_next`, `find_prev`; `jump_back`, `jump_forward`; `visual`,
+`find_next`, `find_prev`, `search`, `search_back`, `search_next`,
+`search_prev`; `jump_back`, `jump_forward`; `visual`,
 `visual_lines`, `yank`, `scroll_down`, `scroll_up`, `half_down`, `half_up`,
 `scroll_left`, `scroll_right`, `wheel_down`, `wheel_up`, `wheel_left`,
 `wheel_right`, `zoom_in`, `zoom_out`, `fit`, `fit_width`, `point` (the

@@ -76,6 +76,7 @@ PDFs: select a PDF in Finder, Get Info, Open with: pdf.nvim, Change All.
 | CTRL-D CTRL-U                     | scroll half a window                       |
 | `n` `p` (or Space, Backspace)     | next / previous page                       |
 | `gg` `G`, `3G`                    | first / last page, page 3                  |
+| `/` `?`, then `n` `N`             | search the text; Esc hides the matches     |
 | `+` `-`                           | zoom in / out                              |
 | `zw` `zp`                         | fit the page's width / the whole page      |
 | `v` `V`, or drag the mouse        | select text                                |

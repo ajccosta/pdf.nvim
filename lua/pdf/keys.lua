@@ -24,6 +24,10 @@ local actions = {
   find_back = function() cursor.find('F') end,
   till = function() cursor.find('t') end,
   till_back = function() cursor.find('T') end,
+  search = function() cursor.search(false) end,
+  search_back = function() cursor.search(true) end,
+  search_next = function() cursor.search_again(false) end,
+  search_prev = function() cursor.search_again(true) end,
   find_next = function() cursor.find_again(false) end,
   find_prev = function() cursor.find_again(true) end,
   jump_back = function() cursor.jump(vim.v.count1) end,
@@ -46,7 +50,10 @@ local actions = {
   point = function(m) mouse.point(m) end,
   drag = function(m) mouse.drag(m) end,
   release = function() end,
-  clear = function() comments.forget(vim.api.nvim_get_current_buf()) end,
+  clear = function()
+    cursor.unsearch()
+    comments.forget(vim.api.nvim_get_current_buf())
+  end,
   comment = function() cursor.comment() end,
   delete = function() comments.delete() end,
   undo = function() comments.undo(false) end,
@@ -108,24 +115,48 @@ local function map_mouse()
   end
 end
 
--- map(buf): buf's keys, and the mouse's.
+-- Actions that share a key with others and take it only while theirs is
+-- true: n is the next match while the matches show, else the next page.
+local function searching() return view.search_on end
+A.when = { search_next = searching, search_prev = searching }
+
+-- map(buf): buf's keys, and the mouse's. A key with several actions does the
+-- first whose A.when holds, those with one tried first.
 function A.map(buf)
+  local by_key = {}
   for action, keys in pairs(config.keys) do
     if not A.mouse_actions[action] then
       for _, key in ipairs(keys) do
-        if key:match('^%d$') then
-          -- a digit after a count is the count's (10j), as in Vim
-          vim.keymap.set('n', key, function()
-            if vim.v.count > 0 then
-              return key
-            end
-            vim.schedule(actions[action])
-            return ''
-          end, { buffer = buf, nowait = true, expr = true })
-        else
-          vim.keymap.set('n', key, actions[action], { buffer = buf, nowait = true })
+        by_key[key] = by_key[key] or {}
+        table.insert(by_key[key], action)
+      end
+    end
+  end
+  for key, list in pairs(by_key) do
+    table.sort(list, function(a, b)
+      if (A.when[a] ~= nil) ~= (A.when[b] ~= nil) then
+        return A.when[a] ~= nil
+      end
+      return a < b
+    end)
+    local function run()
+      for _, action in ipairs(list) do
+        if not A.when[action] or A.when[action]() then
+          return actions[action]()
         end
       end
+    end
+    if key:match('^%d$') then
+      -- a digit after a count is the count's (10j), as in Vim
+      vim.keymap.set('n', key, function()
+        if vim.v.count > 0 then
+          return key
+        end
+        vim.schedule(run)
+        return ''
+      end, { buffer = buf, nowait = true, expr = true })
+    else
+      vim.keymap.set('n', key, run, { buffer = buf, nowait = true })
     end
   end
   map_mouse()
