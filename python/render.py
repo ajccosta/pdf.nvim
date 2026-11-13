@@ -51,6 +51,7 @@
 # the PDF, with what other readers need to open each comment (see tidy),
 # then replies as comments does, with "added": the new ones' ids.
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -672,9 +673,43 @@ def tidy(doc):
                 doc.xref_set_key(popup, "Open", "false")
 
 
+def write(file, data):
+    tmp = file + ".pdfnvim-tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, file)
+
+
+def read(file):
+    with open(file, "rb") as f:
+        return f.read()
+
+
+def digest(data):
+    return hashlib.sha1(data).digest()
+
+
+history = {}  # by file: its undo and redo steps, each one apply's, the last last
+MAX_UNDO = 200
+
+
+def remember(file, before, after):
+    """The step from bytes before to after, undone and redone as one: most
+    often an incremental save, kept as what it appended."""
+    if after.startswith(before):
+        step = dict(cut=len(before), tail=after[len(before):])
+    else:
+        step = dict(before=before, after=after)
+    step.update(old=digest(before), new=digest(after))
+    h = history.setdefault(file, dict(undo=[], redo=[]))
+    h["undo"] = h["undo"][-(MAX_UNDO - 1):] + [step]
+    h["redo"] = []
+
+
 def apply(r):
     file = r["file"]
     _, doc = document(file)
+    before = read(file)
     try:
         added = change(doc, r["changes"])
         tidy(doc)
@@ -688,10 +723,42 @@ def apply(r):
         doc.save(tmp, garbage=1, deflate=True)
         os.replace(tmp, file)
     docs.pop(file, None)
+    remember(file, before, read(file))
     return dict(comments(r), added=added)
 
 
-ops = dict(render=render, comments=comments, at=at, apply=apply, move=move)
+def undo(r):
+    """Undo (or, redo true, redo) the last n applies to the file, whichever
+    comments they changed: the file as it was, byte for byte, so as its
+    comments' ids. Stops at one changed since by something else."""
+    file, back = r["file"], not r.get("redo")
+    h = history.get(file, dict(undo=[], redo=[]))
+    take, give = (h["undo"], h["redo"]) if back else (h["redo"], h["undo"])
+    was = {(c["id"], c["content"], c["page"]) for c in comments(r)["comments"]}
+    done, stale = 0, False
+    for _ in range(int(r.get("n", 1))):
+        if not take:
+            break
+        step, now = take[-1], read(file)
+        if digest(now) != (step["new"] if back else step["old"]):
+            history.pop(file, None)  # changed elsewhere: none of it holds now
+            stale = True
+            break
+        if "cut" in step:
+            data = now[:step["cut"]] if back else now + step["tail"]
+        else:
+            data = step["before"] if back else step["after"]
+        write(file, data)
+        docs.pop(file, None)
+        give.append(take.pop())
+        done += 1
+    out = comments(r)
+    now = {(c["id"], c["content"], c["page"]) for c in out["comments"]}
+    pages = [page for _, _, page in was ^ now]
+    return dict(out, done=done, stale=stale, page=min(pages) if pages else None)
+
+
+ops = dict(render=render, comments=comments, at=at, apply=apply, undo=undo, move=move)
 
 def requests():
     """Each request as it comes; once none has for a moment (not to hold up

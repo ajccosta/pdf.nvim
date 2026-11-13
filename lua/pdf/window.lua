@@ -1,10 +1,14 @@
 -- A PDF's window: its options, and nvim's cursor hidden over it.
 local W = {}
 
--- The options a PDF's window has, so all its columns are the page's.
+-- The options a PDF's window has, so all its columns are the page's; and
+-- one look, current or not: nvim repaints a window whose NormalNC differs
+-- (a colorscheme's link to Normal does) as it gains or loses focus, and the
+-- terminal drops the image under its cells.
 W.pdf_window = {
   number = false, relativenumber = false, signcolumn = 'no', foldcolumn = '0',
   colorcolumn = '', cursorline = false, cursorcolumn = false,
+  winhighlight = 'Normal:Normal,NormalNC:Normal',
 }
 
 -- window_options(pdf): give the current window a PDF's options, keeping what

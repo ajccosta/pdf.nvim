@@ -39,29 +39,37 @@ function M.open(buf)
   end
   vim.b[buf].pdf = st
   local bo = vim.bo[buf]
-  bo.buftype, bo.swapfile, bo.bufhidden = 'nofile', false, 'hide'
+  bo.buftype, bo.swapfile, bo.bufhidden, bo.modifiable = 'nofile', false, 'hide', true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.fn['repeat']({ '' }, vim.o.lines))
   bo.modifiable, bo.modified, bo.filetype = false, false, 'pdf'
   keys.map(buf)
+  -- its autocmds once, opened again (:e) or not
+  local group = vim.api.nvim_create_augroup('pdf.buf' .. buf, {})
   -- the window's columns all for the page
-  vim.api.nvim_create_autocmd('BufWinEnter', { buffer = buf, callback = function() window.window_options(true) end })
-  vim.api.nvim_create_autocmd({ 'BufWinEnter', 'FocusGained', 'CmdlineLeave' }, {
+  vim.api.nvim_create_autocmd('BufWinEnter', {
+    group = group,
+    buffer = buf,
+    callback = function() window.window_options(true) end,
+  })
+  vim.api.nvim_create_autocmd({ 'BufWinEnter', 'CmdlineLeave' }, {
+    group = group,
     buffer = buf,
     callback = function() view.redraw(true) end,
   })
-  -- nvim repaints a window's cells as it stops or starts being the current
-  -- one, and the terminal drops the image under them: a comment's editor
-  -- opening beside the page, say
-  vim.api.nvim_create_autocmd({ 'WinEnter', 'WinLeave' }, {
+  -- back from another app: the page drawn again, in place, not the screen
+  -- cleared first
+  vim.api.nvim_create_autocmd('FocusGained', {
+    group = group,
     buffer = buf,
     callback = function() view.redraw() end,
   })
   vim.api.nvim_create_autocmd({ 'BufWinLeave', 'BufUnload' }, {
+    group = group,
     buffer = buf,
     callback = function() state.keep_view(buf) end,
   })
-  vim.api.nvim_create_autocmd('BufEnter', { buffer = buf, callback = function() window.hide_cursor(true) end })
-  vim.api.nvim_create_autocmd('BufLeave', { buffer = buf, callback = function() window.hide_cursor(false) end })
+  vim.api.nvim_create_autocmd('BufEnter', { group = group, buffer = buf, callback = function() window.hide_cursor(true) end })
+  vim.api.nvim_create_autocmd('BufLeave', { group = group, buffer = buf, callback = function() window.hide_cursor(false) end })
   window.hide_cursor(true)
   window.window_options(true)
   view.redraw(true)

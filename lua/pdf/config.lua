@@ -88,6 +88,8 @@ return {
     clear = { '<Esc>' },
     comment = { 'c' },
     delete = { 'x' },
+    undo = { 'u' },
+    redo = { '<C-r>' },
     comments = { 'C' },
     margin = { 'm' },
   },

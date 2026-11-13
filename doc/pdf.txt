@@ -47,6 +47,7 @@ In a PDF's window:
                                 (at the top of what shows once scrolled away); in
                                 its box beside the page, see |pdf.nvim-comments|
   `x`                             delete the comment under the cursor
+  `u`  `<C-r>`                    undo, redo a change to the comments
   <Esc>                         let go of the selection
   `C`                             open or close the comments list
   `m`                             hide or show the comments beside the page
@@ -117,6 +118,14 @@ so does a click on a note, or on a comment's text beside the page, and a
 double-click on a highlight (a single click on one moves the cursor and shows
 its text in the message line). `x` deletes the comment under the cursor,
 once confirmed.
+
+`u` undoes the last change saved to the PDF's comments, whichever comment it
+was on, and `<C-r>` redoes it, as Vim does a buffer's: changing comment 1,
+then 2, then 1 again, `u` undoes them 1, 2, 1. Each `:w` (a list's too) is
+one change; with a count, that many. The PDF goes back to just what it was,
+and to the page of what changed when that is out of view. The changes are
+remembered while Neovim runs, and forgotten if another program changes the
+PDF meanwhile.
 
 Skim draws comments from other programs but shows their text only once they
 are its own: File > Convert Notes. That moves them out of the PDF into Skim's

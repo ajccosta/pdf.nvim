@@ -49,6 +49,8 @@ local actions = {
   clear = function() comments.forget(vim.api.nvim_get_current_buf()) end,
   comment = function() cursor.comment() end,
   delete = function() comments.delete() end,
+  undo = function() comments.undo(false) end,
+  redo = function() comments.undo(true) end,
   comments = function() comments.comments() end,
   margin = function() view.margin() end,
 }

@@ -102,9 +102,19 @@ end
 
 
 
--- change(file, changes, lbuf, cb): save changes into file, then show what it
--- has in its lists (lbuf's even when modified: they are its changes) and
--- pages, then cb with apply's reply.
+-- refresh(file, now, lbuf): show file's comments, now, in its lists (lbuf's
+-- even when modified: they are its changes) and pages.
+local function refresh(file, now, lbuf)
+  for b, l in pairs(lists) do
+    if l.file == file and vim.api.nvim_buf_is_valid(b) and (b == lbuf or not vim.bo[b].modified) then
+      fill(b, now)
+    end
+  end
+  view.redraw()
+end
+
+-- change(file, changes, lbuf, cb): save changes into file, then show them,
+-- then cb with apply's reply.
 local function change(file, changes, lbuf, cb)
   if #changes == 0 then
     if lbuf then
@@ -113,14 +123,28 @@ local function change(file, changes, lbuf, cb)
     return
   end
   op({ op = 'apply', file = file, changes = changes }, function(r)
-    for b, l in pairs(lists) do
-      if l.file == file and vim.api.nvim_buf_is_valid(b) and (b == lbuf or not vim.bo[b].modified) then
-        fill(b, r.comments)
-      end
-    end
-    view.redraw()
+    refresh(file, r.comments, lbuf)
     if cb then
       cb(r)
+    end
+  end)
+end
+
+-- undo(redo): undo the current PDF's last [count] saved changes to its
+-- comments (or redo them), whichever comments they were on, as Vim undoes
+-- a buffer's; showing the page of what changed, when it is not in view.
+function C.undo(redo)
+  local buf, win = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
+  local file = vim.b[buf].pdf.file
+  op({ op = 'undo', file = file, redo = redo, n = vim.v.count1 }, function(r)
+    if r.done == 0 then
+      return vim.notify(r.stale and 'pdf.nvim: the PDF changed since, so its changes are forgotten'
+        or ('pdf.nvim: no comment change to ' .. (redo and 'redo' or 'undo')))
+    end
+    refresh(file, r.comments)
+    local sh = view.shown[win]
+    if r.page and sh and not sh.pages[r.page] and vim.api.nvim_win_get_buf(win) == buf then
+      vim.api.nvim_win_call(win, function() view.go(r.page + 1) end)
     end
   end)
 end
@@ -314,8 +338,8 @@ end
 
 -- inplace(pwin, spot, ebuf): a window on ebuf over the box spot (as
 -- notes.box gives it) beside the page in pwin, as tall as all of its text
--- and at least the box. Closing it, nvim redraws the screen and with it
--- wipes the page's image: drawn again then.
+-- and at least the box; the page drawn again once it closes, for what it
+-- covered.
 local function inplace(pwin, spot, ebuf, hl)
   local win = vim.api.nvim_open_win(ebuf, true, {
     relative = 'win', win = pwin, row = spot.row, col = spot.col, width = spot.width, height = 1,
@@ -339,7 +363,7 @@ local function inplace(pwin, spot, ebuf, hl)
   fit()
   vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI' }, { buffer = ebuf, callback = fit })
   vim.api.nvim_create_autocmd('WinClosed', {
-    pattern = tostring(win), once = true, callback = function() view.redraw(true) end,
+    pattern = tostring(win), once = true, callback = function() view.redraw() end,
   })
   return win
 end

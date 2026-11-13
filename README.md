@@ -52,6 +52,7 @@ Change All.
 | double-click a highlight            | edit its comment                        |
 | `c`                                 | comment on the text selected or at the cursor; on a comment, edit it |
 | `x`                                 | delete the comment under the cursor     |
+| `u`, `<C-r>`                        | undo, redo a change to the comments     |
 | `Esc`                               | let go of the selection                 |
 | `C`                                 | the comments list, beside the page      |
 | `m`                                 | hide or show the comments beside it     |
