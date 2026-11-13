@@ -201,13 +201,20 @@ function K.visual(lines)
   view.redraw()
 end
 
--- yank(): copy the text selected into the register (as y: "+y the clipboard).
+-- yank(): copy the text selected into the register (as y: "+y the clipboard,
+-- and with 'clipboard' unnamed or unnamedplus, y too).
 function K.yank()
   local st = vim.b.pdf
   if not (selected(st) and st.selected) then
     return vim.notify('pdf.nvim: no text selected (v selects)')
   end
-  vim.fn.setreg(vim.v.register, st.selected)
+  -- v:register in a mapping is " whatever 'clipboard' says
+  local reg = vim.v.register
+  if reg == '"' then
+    local cb = vim.opt.clipboard:get()
+    reg = vim.list_contains(cb, 'unnamedplus') and '+' or vim.list_contains(cb, 'unnamed') and '*' or reg
+  end
+  vim.fn.setreg(reg, st.selected)
   vim.api.nvim_echo({ { string.format('copied "%s"', vim.fn.strcharpart(st.selected, 0, 50)) } }, false, {})
   forget(vim.api.nvim_get_current_buf())
 end
