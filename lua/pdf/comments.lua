@@ -53,16 +53,26 @@ local function forget(buf)
   end
 end
 
--- fill(lbuf, comments): show comments in the list buffer lbuf.
-local function fill(lbuf, comments)
-  local l = lists[lbuf]
+-- in_order(comments): comments sorted as they read: by page, then where on
+-- it in reading order (column by column), then top down.
+local function in_order(comments)
   local top = function(c) return math.min(c.rect[2], c.rect[4]) end
   table.sort(comments, function(a, b)
     if a.page ~= b.page then
       return a.page < b.page
     end
+    if a.order ~= b.order then
+      return a.order < b.order
+    end
     return top(a) < top(b)
   end)
+  return comments
+end
+
+-- fill(lbuf, comments): show comments in the list buffer lbuf.
+local function fill(lbuf, comments)
+  local l = lists[lbuf]
+  in_order(comments)
   local lines = {
     '" ' .. vim.fn.fnamemodify(l.file, ':t') .. ': change, delete or add lines, then :w saves them in it',
     '" a new one: p<page> text, or just text for the page shown; indent to go on',
@@ -238,6 +248,37 @@ function C.comments()
   end
   local win = vim.api.nvim_open_win(lbuf, true, { split = 'left', win = 0, width = config.comments_width })
   vim.wo[win][0].wrap, vim.wo[win][0].linebreak = true, true
+end
+
+-- export(file): the current PDF's comments as text, a line each with an
+-- empty one between, "{highlighted text}: {comment}" ("(page {n})" for a
+-- comment on no text),
+-- written to file, else shown in a new buffer below the PDF.
+function C.export(file)
+  local st = vim.b.pdf
+  if not st then
+    return vim.notify('pdf.nvim: not a PDF', vim.log.levels.ERROR)
+  end
+  op({ op = 'comments', file = st.file }, function(r)
+    local lines = {}
+    for _, c in ipairs(in_order(r.comments)) do
+      local on = c.text ~= '' and c.text or string.format('(page %d)', c.page + 1)
+      if #lines > 0 then
+        lines[#lines + 1] = ''
+      end
+      lines[#lines + 1] = on .. ': ' .. table.concat(text(c.content), ' / ')
+    end
+    if file and file ~= '' then
+      file = vim.fn.fnamemodify(vim.fn.expand(file), ':p')
+      if vim.fn.writefile(lines, file) ~= 0 then
+        return vim.notify('pdf.nvim: could not write ' .. file, vim.log.levels.ERROR)
+      end
+      return vim.notify(string.format('pdf.nvim: %d comments written to %s', #r.comments, file))
+    end
+    vim.cmd('botright new')
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+    vim.bo.modified = false
+  end)
 end
 
 -- under(st, cb): cb with the comment under the cursor, or the one clicked

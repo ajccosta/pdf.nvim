@@ -119,3 +119,7 @@ end, {
 vim.api.nvim_create_user_command('PdfComments', function()
   require('pdf').comments()
 end, {})
+-- :PdfExport [file]: the comments as text, "{highlighted text}: {comment}"
+vim.api.nvim_create_user_command('PdfExport', function(o)
+  require('pdf').export(o.args)
+end, { nargs = '?', complete = 'file' })

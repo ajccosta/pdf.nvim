@@ -94,6 +94,7 @@ reopens where you left it.
 | `u`, CTRL-R                       | undo, redo a change to the comments        |
 | `C`                               | list all comments, editable as a file      |
 | `m`                               | hide or show the comments beside the page  |
+| `:PdfExport [file]`               | the comments as text: `highlighted text: comment` |
 
 A comment opens in a box next to the page. Write in it as in any Vim buffer:
 `:x`, or a click elsewhere, saves it into the PDF; `:q!` closes it without

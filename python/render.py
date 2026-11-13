@@ -44,7 +44,8 @@
 # "content", "color": "#rrggbb"}.
 #
 # comments: {"file"}: {"comments": the document's comments, each {"id", "page",
-# "type", "content", "rect" (in points)}}.
+# "type", "content", "rect" (in points), "text" (a highlight's, else ""),
+# "order" (where it is in its page's reading order)}}.
 #
 # at: {"file", "page", "x", "y"}: {"comment": the one there, as comments has
 # it, or null}.
@@ -258,15 +259,39 @@ def selection(file, mtime, p, sel):
             lines[line] = (lines[line][0] | shown, lines[line][1] | raw)
         else:
             lines[line] = (shown, raw)
+    return joined(t, range(i, j + 1)), [v[0] for v in lines.values()], [v[1] for v in lines.values()]
+
+
+def joined(t, chosen):
+    """The text of t's characters chosen (their indices, in order), a line's
+    run of them after another's with a space."""
+    parts = {}
+    for k in chosen:
+        parts.setdefault(t.chars[k][3], []).append(t.chars[k][2])
     text = ""
-    for a, b in ((max(i, t.lines[n][0]), min(j + 1, t.lines[n][1])) for n in lines):
-        part = "".join(c[2] for c in t.chars[a:b]).strip()
+    for part in ("".join(cs).strip() for cs in parts.values()):
         # a word broken over two lines ("sys-" "tems") whole again
         if text.endswith("-") and text[-2:-1].isalpha() and part[:1].islower():
             text = text[:-1] + part
         else:
             text = (text + " " + part).strip()
-    return text, [v[0] for v in lines.values()], [v[1] for v in lines.values()]
+    return text
+
+
+def highlighted(file, mtime, p, a):
+    """{"text": what a highlight a covers (the characters whose middle is in
+    its quads, on the unrotated page as they are; "" for other comments),
+    "order": where a is in the page's reading order (its first character's,
+    or the one nearest its top left)}."""
+    t = page_text(file, mtime, p)
+    v, chosen = a.vertices, []
+    if a.type[0] == fitz.PDF_ANNOT_HIGHLIGHT and v and len(v) % 4 == 0:
+        quads = [fitz.Quad(v[i:i + 4]).rect for i in range(0, len(v), 4)]
+        chosen = [k for k, c in enumerate(t.chars)
+                  if any(q.contains(fitz.Point((c[1].x0 + c[1].x1) / 2, (c[1].y0 + c[1].y1) / 2)) for q in quads)]
+    corner = (a.rect * p.rotation_matrix).tl
+    order = chosen[0] if chosen else t.nearest(dict(x=corner.x, y=corner.y)) if t.chars else 0
+    return dict(text=joined(t, chosen), order=order)
 
 
 def kind(c):
@@ -760,8 +785,9 @@ def describe(p, a):
 
 
 def comments(r):
-    _, doc = document(r["file"])
-    return dict(comments=[describe(p, a) for p in doc for a in p.annots() if is_comment(a)])
+    mtime, doc = document(r["file"])
+    return dict(comments=[dict(describe(p, a), **highlighted(r["file"], mtime, p, a))
+                          for p in doc for a in p.annots() if is_comment(a)])
 
 
 def covers(p, a, pt):

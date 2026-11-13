@@ -189,6 +189,18 @@ hints. <CR> on a comment shows it in the PDF's window.
 :PdfComments            Opens or closes the PDF's comments list, as `C` does
                         (|pdf.nvim-comments|).
 
+                                                                *:PdfExport*
+:PdfExport [file]       The PDF's comments as text, in reading order, a line
+                        each with an empty one between: the text a highlight
+                        covers, then its comment (its lines joined by ` / `);
+                        `(page {n})` for a comment on no text: >
+                          a stable log suffix: Why stable here?
+
+                          (page 3): Check the bound in Thm 6.4
+<
+                        Written to [file], else shown in a new buffer below,
+                        to `:w` where you like.
+
 ==============================================================================
 4. Setup                                                      *pdf.nvim-setup*
 
