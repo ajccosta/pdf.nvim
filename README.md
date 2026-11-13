@@ -10,8 +10,21 @@ too.
 
 ## What you need
 
-- **iTerm2** (macOS). The pages are drawn as images in the terminal, with
-  iTerm2's image protocol.
+- **A terminal that can show images**, since the pages are drawn as images.
+  We tried these on macOS:
+
+  | Terminal                                       | Works?                       |
+  |------------------------------------------------|------------------------------|
+  | [iTerm2](https://iterm2.com)                   | yes                          |
+  | [Ghostty](https://ghostty.org)                 | yes                          |
+  | [Kitty](https://sw.kovidgoyal.net/kitty)       | yes                          |
+  | [WezTerm](https://wezterm.org)                 | yes                          |
+  | [Rio](https://rioterm.com)                     | yes                          |
+  | [VS Code](https://code.visualstudio.com)'s terminal | yes, after one setting: see [TERMINALS.md](TERMINALS.md#vs-code) |
+  | Terminal (macOS's own)                         | no: it can't show images     |
+  | [Tabby](https://tabby.sh)                      | no: it can't show images     |
+
+  [TERMINALS.md](TERMINALS.md) has more on each.
 - **Neovim 0.12** or newer.
 - **Python 3 with PyMuPDF**, which renders the pages:
 

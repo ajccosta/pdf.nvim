@@ -2,7 +2,10 @@
 -- so each module's reference to it sees the changes.
 return {
   python = 'python3', -- one with PyMuPDF (`pip install pymupdf`)
-  cell = { 9, 18 }, -- cell size in pixels, when the terminal does not say
+  -- how the terminal draws images: 'iterm' (iTerm2, WezTerm, Rio, VS Code),
+  -- 'kitty' (Kitty, Ghostty), or 'auto', the terminal's
+  protocol = 'auto',
+  cell = { 9, 18 }, -- a cell's size in pixels to draw at (the width as the terminal's cells are shaped)
   scale = 2, -- render this many times the screen size (retina)
   scale_scrolling = 1, -- and this many while scrolling, which is faster
   sharp_after = 150, -- ms without scrolling before the sharp frame

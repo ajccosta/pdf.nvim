@@ -14,6 +14,7 @@ vim.api.nvim_create_autocmd('BufWinEnter', {
     if not vim.b[ev.buf].pdf then
       require('pdf').window_options(false)
       require('pdf').unnote(vim.api.nvim_get_current_win())
+      require('pdf').clear(vim.api.nvim_get_current_win())
     end
   end,
 })
@@ -21,7 +22,10 @@ vim.api.nvim_create_autocmd('WinClosed', {
   group = group,
   callback = function(ev)
     if package.loaded.pdf then
-      vim.schedule(function() require('pdf').unnote(tonumber(ev.match)) end)
+      vim.schedule(function()
+        require('pdf').unnote(tonumber(ev.match))
+        require('pdf').clear(tonumber(ev.match))
+      end)
     end
   end,
 })
@@ -35,6 +39,16 @@ vim.api.nvim_create_autocmd('VimLeavePre', {
         require('pdf').keep_view(buf)
       end
       require('pdf').hide_cursor(false)
+      require('pdf').clear()
+    end
+  end,
+})
+-- another tab: its pages gone, where the terminal keeps them until told
+vim.api.nvim_create_autocmd('TabLeave', {
+  group = group,
+  callback = function()
+    if package.loaded.pdf then
+      require('pdf').clear()
     end
   end,
 })

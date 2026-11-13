@@ -134,7 +134,7 @@ local function draw(win, clear, scale)
       links = links and vim.tbl_extend('force', links, { row = rpx }),
       -- only a sharp frame filling the height of a window as wide as the
       -- screen scrolls by rows: whole lines move
-      rolls = scale == config.scale and h == rows and r.ih == rows * rpx
+      rolls = renderer.protocol().rolls and scale == config.scale and h == rows and r.ih == rows * rpx
         and info.wincol == 1 and info.width == vim.o.columns,
     }
     for _, g in ipairs(r.pages) do
@@ -144,9 +144,9 @@ local function draw(win, clear, scale)
     if clear or not vim.deep_equal(vim.w[win].pdf_box, box) then
       vim.w[win].pdf_box = box
       vim.cmd('mode')
-      vim.schedule(function() renderer.send(png, box) end)
+      vim.schedule(function() renderer.send(png, box, { win = win }) end)
     else
-      renderer.send(png, box)
+      renderer.send(png, box, { win = win })
     end
   end)
 end
@@ -239,7 +239,7 @@ local function pump(win)
       local b = sh.box
       renderer.send(sh.png, {
         row = d > 0 and b.row + b.h - d or b.row, col = b.col, w = b.w, h = math.abs(d),
-      }, roll(sh, d))
+      }, { win = win, before = roll(sh, d), roll = d, whole = b })
       sh.py = sh.py + d * sh.rpx
       for _, g in ipairs(r.pages) do
         sh.pages[g.page] = g

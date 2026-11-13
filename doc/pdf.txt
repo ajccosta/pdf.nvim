@@ -1,8 +1,9 @@
 *pdf.txt*  Read PDFs inside Neovim                                     *pdf.nvim*
 
-`nvim file.pdf` shows the PDF's pages in the window, drawn with iTerm2's
-inline image protocol. Needs Neovim 0.12+, iTerm2 and a `python3` with PyMuPDF
-(`pip install pymupdf`).
+`nvim file.pdf` shows the PDF's pages in the window, drawn as images by the
+terminal. Needs Neovim 0.12+, a terminal that shows images (iTerm2, Ghostty,
+Kitty, WezTerm, Rio, or VS Code's with `terminal.integrated.enableImages`; see
+TERMINALS.md) and a `python3` with PyMuPDF (`pip install pymupdf`).
 
 1. Keys                                                       |pdf.nvim-keys|
 2. Comments                                               |pdf.nvim-comments|
@@ -194,6 +195,9 @@ hints. <CR> on a comment shows it in the PDF's window.
 
   require('pdf').setup({
     python = 'python3',   -- one with PyMuPDF
+    protocol = 'auto',    -- the terminal's image protocol: 'iterm' (iTerm2,
+                          -- WezTerm, Rio, VS Code), 'kitty' (Kitty, Ghostty);
+                          -- 'auto' finds it
     scale = 2,            -- render at twice the screen size (retina)
     view = 'width',       -- open fitting the page's width; 1: the whole page
     split_empty = true,   -- a split of a PDF's window starts empty

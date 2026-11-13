@@ -5,8 +5,10 @@ local R = {}
 local root = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':h:h:h')
 R.cache = vim.fn.stdpath('cache') .. '/pdf.nvim'
 
--- The terminal's cell size in pixels, from TIOCGWINSZ on /dev/tty.
-function R.cell_size()
+-- The terminal's cell shape, from TIOCGWINSZ: on the stdio nvim's server
+-- shares with the terminal, else on /dev/tty, which the server, apart from
+-- its TUI, may not have.
+local function terminal_cell()
   local ok, ffi = pcall(require, 'ffi')
   if ok then
     pcall(ffi.cdef, [[
@@ -15,18 +17,39 @@ function R.cell_size()
       int close(int fd);
       int ioctl(int fd, unsigned long req, ...);
     ]])
-    local fd = ffi.C.open('/dev/tty', 0)
-    if fd >= 0 then
-      local ws = ffi.new('struct pdf_winsize')
-      local req = vim.fn.has('mac') == 1 and 0x40087468 or 0x5413
-      local r = ffi.C.ioctl(fd, req, ws)
-      ffi.C.close(fd)
-      if r == 0 and ws.xpixel > 0 and ws.col > 0 then
+    local req = vim.fn.has('mac') == 1 and 0x40087468 or 0x5413
+    local ws = ffi.new('struct pdf_winsize')
+    local function size(fd)
+      if fd >= 0 and ffi.C.ioctl(fd, req, ws) == 0 and ws.xpixel > 0 and ws.col > 0 then
         return ws.xpixel / ws.col, ws.ypixel / ws.row
       end
     end
+    for fd = 0, 2 do
+      local w, h = size(fd)
+      if w then
+        return w, h
+      end
+    end
+    local fd = ffi.C.open('/dev/tty', 0)
+    local w, h = size(fd)
+    if fd >= 0 then
+      ffi.C.close(fd)
+    end
+    if w then
+      return w, h
+    end
   end
-  return config.cell[1], config.cell[2]
+end
+
+-- The size in pixels to draw a cell at: config.cell's height, the width as
+-- the terminal's cells are shaped. Their pixels (a Retina screen's, or not)
+-- would only change how sharp pages are, which config.scale says.
+function R.cell_size()
+  local w, h = terminal_cell()
+  if not w then
+    return config.cell[1], config.cell[2]
+  end
+  return config.cell[2] * w / h, config.cell[2]
 end
 
 -- The renderer: one request at a time per window, and of those that come
@@ -142,19 +165,117 @@ function R.frame(f)
   end
 end
 
--- send(png, box, before): draw png in box's cells, after the escapes before;
--- in a frame, so rows before moves show only with png in them.
-function R.send(png, box, before)
+-- The terminal's image protocols, each {detect(): whether the terminal is one
+-- that speaks it, image(data, box, id): the escapes that draw data (a PNG, in
+-- base64) in box's cells from the cursor, forget(id): those that take image id
+-- away, for a terminal whose images stay until told, rolls: whether images
+-- move with the rows a scroll region scrolls}.
+local env = vim.env
+R.protocols = {
+  -- iTerm2's inline images (iTerm2, WezTerm, Rio, VS Code)
+  iterm = {
+    detect = function() return vim.list_contains({ 'iTerm.app', 'WezTerm', 'rio', 'vscode' }, env.TERM_PROGRAM) end,
+    image = function(data, box)
+      return string.format('\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\007',
+        box.w, box.h, data)
+    end,
+    rolls = true,
+  },
+  -- Kitty's graphics protocol (Kitty, Ghostty): in chunks, under nvim's text
+  kitty = {
+    detect = function()
+      return env.TERM == 'xterm-kitty' or env.TERM == 'xterm-ghostty' or env.TERM_PROGRAM == 'ghostty'
+        or env.KITTY_WINDOW_ID ~= nil
+    end,
+    image = function(data, box, id)
+      local out, size = {}, 4096
+      for at = 1, #data, size do
+        local more = at + size <= #data and 1 or 0
+        out[#out + 1] = at == 1
+          and string.format('\027_Ga=T,f=100,t=d,i=%d,c=%d,r=%d,C=1,z=-1,q=2,m=%d;', id, box.w, box.h, more)
+          or string.format('\027_Gm=%d;', more)
+        out[#out + 1] = data:sub(at, at + size - 1) .. '\027\\'
+      end
+      return table.concat(out)
+    end,
+    forget = function(id) return string.format('\027_Ga=d,d=I,i=%d,q=2\027\\', id) end,
+    rolls = true,
+  },
+}
+
+-- The order to try them in: TERM first, which each terminal sets; then
+-- TERM_PROGRAM, which a terminal started from another's shell may inherit.
+R.detect = { 'kitty', 'iterm' }
+
+-- protocol(): the one config.protocol names, or the terminal's.
+function R.protocol()
+  local p = R.protocols[config.protocol]
+  if p then
+    return p
+  end
+  for _, name in ipairs(R.detect) do
+    if R.protocols[name].detect() then
+      return R.protocols[name]
+    end
+  end
+  return R.protocols.iterm
+end
+
+-- Each window's images still drawn, for a protocol that forgets them: {id,
+-- row, h}, in screen rows.
+local images, next_id = {}, (vim.fn.getpid() % 4000) * 1000000
+
+-- forget(win, keep): take away win's images (all, or those keep says no to).
+local function forget(win, keep)
+  local p, kept = R.protocol(), {}
+  for _, im in ipairs(images[win] or {}) do
+    if keep and keep(im) then
+      kept[#kept + 1] = im
+    else
+      vim.api.nvim_ui_send(p.forget(im.id))
+    end
+  end
+  images[win] = kept
+end
+
+-- clear(win): take win's page away, where the terminal keeps it until told
+-- (nil: every window's).
+function R.clear(win)
+  if not R.protocol().forget then
+    return
+  end
+  for w in pairs(win and { [win] = true } or images) do
+    forget(w)
+  end
+end
+
+-- send(png, box, opts): draw png in box's cells, for window opts.win: all of
+-- what it shows, or with opts.roll, a strip of it after the escapes opts.before
+-- moved its rows opts.roll up (down when < 0). In a frame, so rows before
+-- moves show only with png in them.
+function R.send(png, box, opts)
   local f = io.open(png, 'rb')
   if not f then
     return
   end
   local data = vim.base64.encode(f:read('*a'))
   f:close()
+  local p = R.protocol()
+  next_id = next_id + 1
+  local id = next_id
   R.frame(function()
-    vim.api.nvim_ui_send(string.format(
-      '\0277%s\027[%d;%dH\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\007\0278',
-      before or '', box.row, box.col, box.w, box.h, data))
+    vim.api.nvim_ui_send(string.format('\0277%s\027[%d;%dH%s\0278', opts.before or '', box.row, box.col,
+      p.image(data, box, id)))
+    if p.forget then
+      -- the images moved with the rows, those moved out gone; or all of them
+      -- covered by this one
+      local whole = opts.whole
+      forget(opts.win, opts.roll and function(im)
+        im.row = im.row - opts.roll
+        return im.row + im.h > whole.row and im.row < whole.row + whole.h
+      end)
+      table.insert(images[opts.win], { id = id, row = box.row, h = box.h })
+    end
   end)
 end
 

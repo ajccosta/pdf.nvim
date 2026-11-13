@@ -1,6 +1,6 @@
--- pdf.nvim: `nvim file.pdf` shows its pages, drawn in the window with iTerm2's
--- inline image protocol. PyMuPDF renders each page to a PNG, in a process kept
--- running (python/render.py).
+-- pdf.nvim: `nvim file.pdf` shows its pages, drawn in the window as images, in
+-- the terminal's image protocol (renderer.lua). PyMuPDF renders each page to a
+-- PNG, in a process kept running (python/render.py).
 local config = require('pdf.config')
 local state = require('pdf.state')
 local view = require('pdf.view')
@@ -19,6 +19,7 @@ local public = {
   cursor = { 'motions', 'jumps', 'comment', 'move', 'jump', 'find', 'find_again', 'visual', 'yank' },
   mouse = { 'point', 'drag' },
   keys = { 'mouse_actions' },
+  renderer = { 'clear' },
 }
 for part, names in pairs(public) do
   for _, k in ipairs(names) do
@@ -73,6 +74,16 @@ function M.open(buf)
   window.hide_cursor(true)
   window.window_options(true)
   view.redraw(true)
+  -- a terminal just opened may settle on its cell size only after it shows
+  -- the window (WezTerm), its columns and lines the same: drawn again then
+  local renderer = require('pdf.renderer')
+  local cw, ch = renderer.cell_size()
+  vim.defer_fn(function()
+    local w, h = renderer.cell_size()
+    if w ~= cw or h ~= ch then
+      view.redraw(true)
+    end
+  end, 1000)
 end
 
 -- position(across, down): where pages sit, as config.position takes it; down
