@@ -287,6 +287,31 @@ local function delete_comment(ebuf)
   end)
 end
 
+-- The editor's keys that move by the rows it shows, not its real lines.
+local rows = { j = 'gj', k = 'gk', ['<Down>'] = 'gj', ['<Up>'] = 'gk' }
+
+-- close_on_leave(win, ebuf): close win, ebuf's window over the page, once
+-- another window is the current one (a click on the page, or on another
+-- comment): with its text saved, as :x would.
+local function close_on_leave(win, ebuf)
+  vim.api.nvim_create_autocmd('WinLeave', {
+    buffer = ebuf,
+    once = true,
+    callback = function()
+      -- after the leaving: no window closes while it happens
+      vim.schedule(function()
+        if not vim.api.nvim_win_is_valid(win) then
+          return
+        end
+        if vim.api.nvim_buf_is_valid(ebuf) and vim.bo[ebuf].modified then
+          write_comment(ebuf)
+        end
+        vim.api.nvim_win_close(win, true)
+      end)
+    end,
+  })
+end
+
 -- inplace(pwin, spot, ebuf): a window on ebuf over the box spot (as
 -- notes.box gives it) beside the page in pwin, as tall as all of its text
 -- and at least the box. Closing it, nvim redraws the screen and with it
@@ -350,6 +375,13 @@ local function edit(buf, c, add)
   vim.keymap.set('ca', 'd', function()
     return vim.fn.getcmdtype() == ':' and vim.fn.getcmdline() == 'd' and 'PdfDelete' or 'd'
   end, { buffer = ebuf, expr = true })
+  -- up and down by the lines it shows, a paragraph wrapping into many; with
+  -- a count, by its real lines, as relative numbers count them
+  for key, by_row in pairs(rows) do
+    vim.keymap.set({ 'n', 'x' }, key, function()
+      return vim.v.count == 0 and by_row or key
+    end, { buffer = ebuf, expr = true })
+  end
   local pwin = buf_win(buf)
   local spot = pwin and notes.box(view.shown[pwin], c and c.id, add)
   local win
@@ -371,6 +403,9 @@ local function edit(buf, c, add)
   vim.schedule(function()
     if vim.api.nvim_win_is_valid(win) then
       vim.api.nvim_set_current_win(win)
+      if spot then
+        close_on_leave(win, ebuf)
+      end
       if not c then
         vim.cmd.startinsert()
       end

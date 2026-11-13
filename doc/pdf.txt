@@ -107,6 +107,9 @@ the cursor. New comments get the colour |:PdfColor| chose.
 A comment is written where it shows: its box beside the page opens, as tall
 as all of its text, and you edit it there as any text: `:w` saves it into the
 PDF, `:x` (or `:wq`) saves and closes it, `:q` closes it and `:d` deletes it.
+A click anywhere else saves and closes it too. `j` and `k` (and the arrows)
+move by the rows it shows, a long paragraph wrapping into many; with a count,
+by its lines.
 A new one opens beside its row on the right; with no room beside the page,
 in a buffer below the PDF (`editor_height` rows at most). A new
 one starts in Insert mode. `c` with the cursor on a comment edits it there;

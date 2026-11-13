@@ -70,7 +70,8 @@ Skim and Acrobat show them too, and they show here on the page. Press `c` to
 add one at the cursor, or select text first (`v`, or a drag) to comment on it:
 it shows selected while you write, and is saved highlighted. The comment
 opens in its box beside the page, as tall as all of it, written as any text in Vim: `:w` saves it in
-the PDF, `:x` saves and closes it, `:q` closes it, and `:d` deletes it. `c` on a comment, a
+the PDF, `:x` saves and closes it, `:q` closes it, and `:d` deletes it; a click elsewhere saves and closes it, and
+`j`/`k` move by the rows it shows. `c` on a comment, a
 click on a note or on a comment's text beside the page, or a double-click on a
 highlight opens it there to edit; `x` deletes it. Each comment's text shows
 beside the page, as text in the window, in a box as near the row of what it is on as the others let it,

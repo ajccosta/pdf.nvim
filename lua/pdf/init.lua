@@ -49,6 +49,13 @@ function M.open(buf)
     buffer = buf,
     callback = function() view.redraw(true) end,
   })
+  -- nvim repaints a window's cells as it stops or starts being the current
+  -- one, and the terminal drops the image under them: a comment's editor
+  -- opening beside the page, say
+  vim.api.nvim_create_autocmd({ 'WinEnter', 'WinLeave' }, {
+    buffer = buf,
+    callback = function() view.redraw() end,
+  })
   vim.api.nvim_create_autocmd({ 'BufWinLeave', 'BufUnload' }, {
     buffer = buf,
     callback = function() state.keep_view(buf) end,
