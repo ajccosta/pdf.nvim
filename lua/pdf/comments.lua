@@ -336,11 +336,12 @@ local function close_on_leave(win, ebuf)
   })
 end
 
--- inplace(pwin, spot, ebuf): a window on ebuf over the box spot (as
--- notes.box gives it) beside the page in pwin, as tall as all of its text
--- and at least the box; the page drawn again once it closes, for what it
--- covered.
-local function inplace(pwin, spot, ebuf, hl)
+-- inplace(pwin, where, ebuf, hl): a window on ebuf over the box where(sh)
+-- gives (as notes.box does; sh: what pwin shows) beside the page in pwin, as
+-- tall as all of its text and at least the box, and with it as the page
+-- scrolls; the page drawn again once it closes, for what it covered.
+local function inplace(pwin, where, ebuf, hl)
+  local spot = where(view.shown[pwin])
   local win = vim.api.nvim_open_win(ebuf, true, {
     relative = 'win', win = pwin, row = spot.row, col = spot.col, width = spot.width, height = 1,
     border = 'single', style = 'minimal', zindex = 40,
@@ -362,6 +363,11 @@ local function inplace(pwin, spot, ebuf, hl)
   end
   fit()
   vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI' }, { buffer = ebuf, callback = fit })
+  -- where the box goes now; where it was while scrolled out of view
+  notes.follow(pwin, win, function(sh)
+    spot = where(sh) or spot
+    fit()
+  end)
   vim.api.nvim_create_autocmd('WinClosed', {
     pattern = tostring(win), once = true, callback = function() view.redraw() end,
   })
@@ -407,11 +413,16 @@ local function edit(buf, c, add)
     end, { buffer = ebuf, expr = true })
   end
   local pwin = buf_win(buf)
-  local spot = pwin and notes.box(view.shown[pwin], c and c.id, add)
+  -- the comment's box, the new one's too once saved
+  local function where(sh)
+    local e = editors[ebuf]
+    return notes.box(sh, e and e.id or c and c.id, add)
+  end
+  local spot = pwin and where(view.shown[pwin])
   local win
   if spot then
     local hl = spot.hl or notes.hl(color())
-    win = inplace(pwin, spot, ebuf, hl)
+    win = inplace(pwin, where, ebuf, hl)
   else
     local height = math.max(3, math.min(config.editor_height, #lines + 1))
     win = vim.api.nvim_open_win(ebuf, true, { split = 'below', win = pwin or 0, height = height })

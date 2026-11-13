@@ -90,6 +90,29 @@ end
 -- last, and in one window that would cross the page and erase it.
 local sides = {} -- win: { left = float, right = float }
 
+-- Windows over a window's comments (an editor over its box): win: { [float]
+-- = follow(sh), which moves it where they are drawn now }.
+local over = {}
+
+-- follow(win, float, f): f(sh) each time win's comments are drawn again (sh:
+-- what win shows), while float is open.
+function N.follow(win, float, f)
+  over[win] = over[win] or {}
+  over[win][float] = f
+end
+
+-- covered(win): whether a window is over win's comments; its rows then must
+-- not roll, which would move it too, where nvim does not know.
+function N.covered(win)
+  for f in pairs(over[win] or {}) do
+    if vim.api.nvim_win_is_valid(f) then
+      return true
+    end
+    over[win][f] = nil
+  end
+  return false
+end
+
 -- unnote(win): close win's floats for its comments' text.
 function N.unnote(win)
   for _, f in pairs(sides[win] or {}) do
@@ -224,7 +247,7 @@ end
 -- line that has to go up or down to its box does so in a lane of its own
 -- (route()), so lines never cross or merge.
 -- Laid out as on the right, then mirrored for the left.
-function N.draw(win, sh)
+local function draw(win, sh)
   if not sh or not vim.api.nvim_win_is_valid(win) then
     return N.unnote(win)
   end
@@ -306,6 +329,15 @@ function N.draw(win, sh)
         end
         put(side, it.into, lane, (down and '╰' or '╭') .. string.rep('─', to - 2 - lane), hl)
       end
+    end
+  end
+end
+
+function N.draw(win, sh)
+  draw(win, sh)
+  if N.covered(win) and sh then
+    for _, f in pairs(over[win]) do
+      f(sh)
     end
   end
 end

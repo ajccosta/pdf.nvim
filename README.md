@@ -112,7 +112,7 @@ require('pdf').setup({
   view = 'width',       -- open fitting the page's width (1: the whole page)
   color = 'blue',       -- new comments' colour
   notes_width = 40,     -- columns for the comments beside the page (0: none)
-  notes_lines = 3,      -- rows of each comment shown beside it (0: all)
+  notes_lines = 0,      -- most rows of each comment beside the page (0: all that fit)
   keys = { next = { 'n' } },  -- change any action's keys
 })
 ```

@@ -31,7 +31,8 @@ return {
   notes_min_width = 12, -- zoomed in, fewer than this left beside the page: none
   notes_max_width = 80, -- with more room beside the page, they take up to this
   notes_gutter = 8, -- of that room, the columns left between page and comments
-  notes_lines = 3, -- rows of each comment's text beside the page, at most; 0: all
+  notes_lines = 0, -- rows of each comment's text beside the page, at most; 0: all of it
+  -- (either way, fewer when the comments would not all fit in the window)
   -- new comments' colour: a name from colors or "#rrggbb"; see :PdfColor
   color = 'blue',
   colors = {

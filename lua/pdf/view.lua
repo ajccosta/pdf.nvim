@@ -257,7 +257,7 @@ end
 local function roll_to(dy, step)
   local win = vim.api.nvim_get_current_win()
   local sh, st = shown[win], vim.b.pdf
-  if not (config.smooth and sh and sh.rolls and sh.page == st.page) then
+  if not (config.smooth and sh and sh.rolls and sh.page == st.page and not notes.covered(win)) then
     return false
   end
   local from = sh.target or sh.py
