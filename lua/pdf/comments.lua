@@ -1,5 +1,6 @@
 -- The PDF's comments: the list of them, and the editor of one.
 local config = require('pdf.config')
+local notes = require('pdf.notes')
 local renderer = require('pdf.renderer')
 local util = require('pdf.util')
 local view = require('pdf.view')
@@ -248,11 +249,12 @@ local function write_comment(ebuf)
   if c['do'] == 'add' then
     forget(e.pdf) -- the text it is on, shown selected until now
   end
+  -- written: so :x and :wq close it now, not after the PDF is
+  vim.bo[ebuf].modified = false
   change(e.file, { c }, nil, function(r)
     if not vim.api.nvim_buf_is_valid(ebuf) then
       return
     end
-    vim.bo[ebuf].modified = false
     if c['do'] == 'delete' then
       -- what is written next is a new one where it was
       e.id = nil
@@ -285,9 +287,42 @@ local function delete_comment(ebuf)
   end)
 end
 
+-- inplace(pwin, spot, ebuf): a window on ebuf over the box spot (as
+-- notes.box gives it) beside the page in pwin, as tall as all of its text
+-- and at least the box. Closing it, nvim redraws the screen and with it
+-- wipes the page's image: drawn again then.
+local function inplace(pwin, spot, ebuf, hl)
+  local win = vim.api.nvim_open_win(ebuf, true, {
+    relative = 'win', win = pwin, row = spot.row, col = spot.col, width = spot.width, height = 1,
+    border = 'single', style = 'minimal', zindex = 40,
+    footer = vim.fn.strcharpart(' :w save  :x save+quit  :q quit ', 0, spot.width), footer_pos = 'center',
+  })
+  local wo = vim.wo[win][0]
+  wo.wrap, wo.linebreak, wo.foldcolumn = true, true, '1' -- a column of room left, as in the box
+  wo.winhighlight = 'NormalFloat:Normal,FloatBorder:' .. hl .. ',FloatFooter:' .. hl
+  -- fit(): as tall as its text, moved up when that would go past the bottom
+  local function fit()
+    if not vim.api.nvim_win_is_valid(win) or not vim.api.nvim_win_is_valid(pwin) then
+      return
+    end
+    local room = vim.api.nvim_win_get_height(pwin) - 2
+    local h = math.max(spot.height, math.min(vim.api.nvim_win_text_height(win, {}).all, room))
+    vim.api.nvim_win_set_config(win, {
+      relative = 'win', win = pwin, row = math.max(0, math.min(spot.row, room - h)), col = spot.col, height = h,
+    })
+  end
+  fit()
+  vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI' }, { buffer = ebuf, callback = fit })
+  vim.api.nvim_create_autocmd('WinClosed', {
+    pattern = tostring(win), once = true, callback = function() view.redraw(true) end,
+  })
+  return win
+end
+
 -- edit(buf, c, add): edit comment c of buf's PDF ({ id, content, page }), or
--- a new one (add: apply's add for it), in a buffer below the PDF, as text:
--- :w saves it into the PDF, :d (or :w with no text) deletes it.
+-- a new one (add: apply's add for it), as text where it shows beside the
+-- page (notes.box), else in a buffer below the PDF: :w saves it into the
+-- PDF, :x saves and closes, :d (or :w with no text) deletes it.
 local function edit(buf, c, add)
   local st = vim.b[buf].pdf
   for b, e in pairs(editors) do
@@ -315,12 +350,20 @@ local function edit(buf, c, add)
   vim.keymap.set('ca', 'd', function()
     return vim.fn.getcmdtype() == ':' and vim.fn.getcmdline() == 'd' and 'PdfDelete' or 'd'
   end, { buffer = ebuf, expr = true })
-  local height = math.max(3, math.min(config.editor_height, #lines + 1))
-  local win = vim.api.nvim_open_win(ebuf, true, { split = 'below', win = buf_win(buf) or 0, height = height })
-  local wo = vim.wo[win][0]
-  wo.wrap, wo.linebreak = true, true
-  wo.winbar = string.format(' %s on page %d: :w saves it in the PDF, :d deletes it, :q closes',
-    c and 'comment' or 'new comment', page)
+  local pwin = buf_win(buf)
+  local spot = pwin and notes.box(view.shown[pwin], c and c.id, add)
+  local win
+  if spot then
+    local hl = spot.hl or notes.hl(color())
+    win = inplace(pwin, spot, ebuf, hl)
+  else
+    local height = math.max(3, math.min(config.editor_height, #lines + 1))
+    win = vim.api.nvim_open_win(ebuf, true, { split = 'below', win = pwin or 0, height = height })
+    local wo = vim.wo[win][0]
+    wo.wrap, wo.linebreak = true, true
+    wo.winbar = string.format(' %s on page %d: :w saves it in the PDF, :d deletes it, :q closes',
+      c and 'comment' or 'new comment', page)
+  end
   if c then
     forget(buf)
   end

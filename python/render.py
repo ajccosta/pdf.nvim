@@ -2,7 +2,8 @@
 # request per line on stdin, one JSON reply per line on stdout. Kept running,
 # so documents stay open and a page drawn once is cut from for each scroll
 # step. A request's "op" picks what it does (render when there is none); the
-# reply carries its "id", or {"id", "error"}.
+# reply carries its "id", or {"id", "error"}. While no request waits, it
+# draws ahead the pages around the last view, so scrolling on finds them drawn.
 #
 # render: {"file", "page" (0-based), "width", "height" (in pixels), "out"},
 # then either
@@ -20,8 +21,8 @@
 # else with "cursor" {"page", "x", "y"}, the character there shows as a
 # block. With "links": {"cols": the
 # text's width, "row": a row's height in pixels, "sides": ["left", "right"] or
-# one}, each comment goes on the side where its text sits nearest its row, a
-# line from it to that edge of the page.
+# one, "lines": the most rows a comment's text takes, or none for all}, each
+# comment goes on the side of the page it is on, a line from it to that edge.
 #
 # The reply: {"id", "count" (pages), "page" (the one at the view's top), "iw",
 # "ih" (the image's size), "x", "y" (where in page the view starts, kept in
@@ -53,6 +54,7 @@ import getpass
 import json
 import os
 import re
+import select
 import sys
 import uuid
 
@@ -60,9 +62,13 @@ import fitz
 
 docs = {}  # by file: (mtime, document)
 pages = {}  # (file, mtime, page, links, scale): the whole page drawn
-sheets = {}  # (file, mtime, page): the page with its links, to draw
+sheets = {}  # (file, mtime, page): the page with its comments baked in, to draw
 texts = {}  # (file, mtime, page): its Text
-MAX_PAGES = 6
+laid = {}  # (file, mtime, page, links, scale): its marks
+facts = {}  # (file, mtime, what): about the whole document, small
+MAX_PAGES = 16  # of each cache, the most recently used kept
+ahead = []  # what to draw next while idle: functions, the first first
+IDLE = 0.15  # seconds without a request before drawing ahead
 MAX_PIXELS = 40_000_000  # past this, only the part asked for is drawn
 
 
@@ -74,11 +80,20 @@ def document(file):
 
 
 def cached(cache, key, make):
-    if key not in cache:
+    if key in cache:
+        cache[key] = cache.pop(key)  # the most recently used last
+    else:
         while len(cache) >= MAX_PAGES:
             cache.pop(next(iter(cache)))
         cache[key] = make()
     return cache[key]
+
+
+def fact(file, mtime, what, make):
+    key = (file, mtime, what)
+    if key not in facts:
+        facts[key] = make()
+    return facts[key]
 
 
 def whole_page(file, mtime, p, links, sheet, scale):
@@ -93,6 +108,7 @@ class Text:
 
     def __init__(self, p):
         self.chars, self.lines, self.blocks = [], [], []
+        self.near = {}  # (x, y): nearest()'s answer, searched once
         for b in p.get_text("rawdict")["blocks"]:
             for l in b.get("lines", []):
                 first = len(self.chars)
@@ -106,7 +122,12 @@ class Text:
 
     def nearest(self, pt):
         """The character at pt (a {"x", "y"}), else the one nearest it."""
-        pt = fitz.Point(pt["x"], pt["y"])
+        key = (pt["x"], pt["y"])
+        if key not in self.near:
+            self.near[key] = self.search(fitz.Point(key))
+        return self.near[key]
+
+    def search(self, pt):
         return min(range(len(self.chars)),
                    key=lambda i: 0 if pt in self.chars[i][0] else pt.distance_to(self.chars[i][0]))
 
@@ -316,12 +337,18 @@ def move(r):
 HIGHLIGHTS = (fitz.PDF_ANNOT_HIGHLIGHT, fitz.PDF_ANNOT_UNDERLINE, fitz.PDF_ANNOT_STRIKE_OUT, fitz.PDF_ANNOT_SQUIGGLY)
 
 
-def marks(p, links=None, scale=1):
-    """p's comments, top to bottom: each (annot, its first line's box, its
-    colour, the side its text goes on). The sides are links' sides, each
-    comment on the one where its text, about its lines' rows tall, starts
-    nearest its row; on a tie, the side of the page it is nearer. Its line
-    runs just under its text, not through the words beside it."""
+def marks(file, mtime, p, links=None, scale=1):
+    """p's comments, top to bottom: each (its xref, its first line's box, its
+    colour, the side its text goes on, its text). The sides are links' sides, each
+    comment on the one of the page it is on, so its line crosses no more of
+    the page than it must, unless that side has no room left beside the page; its text, at most links' "lines" rows tall,
+    in a box starting the row above its own or below the one before. Its line runs just under its
+    text, not through the words beside it."""
+    key = (file, mtime, p.number, json.dumps(links, sort_keys=True), round(scale, 6))
+    return cached(laid, key, lambda: lay_out(p, links, scale))
+
+
+def lay_out(p, links, scale):
     found = []
     for a in p.annots():
         if not is_comment(a):
@@ -334,62 +361,99 @@ def marks(p, links=None, scale=1):
         found.append((a, first, a.colors.get("stroke") or (1, 0.85, 0)))
     found.sort(key=lambda f: (f[1].y0, f[1].x0))
     sides = links["sides"] if links else ["right"]
-    row, width = (links["row"] / scale, max(1, links["cols"] - 2)) if links else (0, 1)
+    row, width = (links["row"] / scale, max(1, links["cols"] - 4)) if links else (0, 1)
+    most = links.get("lines") if links else None
     below = {side: 0 for side in sides}
     out = []
     for a, first, color in found:
         y = first.y1 + 1
         lines = sum(-(-len(l.strip()) // width) for l in a.info.get("content", "").split("\n") if l.strip())
+        lines = min(lines, most) if most else lines
         near = "left" if first.x0 + first.x1 < p.rect.width else "right"
-        side = min(sides, key=lambda s: (max(y, below[s]), s != near))
-        below[side] = max(y, below[side]) + (max(lines, 1) + 1) * row
-        out.append((a, first, color, side))
+        tall = (max(lines, 1) + 2) * row
+
+        def full(s):
+            return max(y - row, below[s]) + tall > p.rect.height
+
+        # the near side, unless the page has no room left there
+        side = min(sides, key=lambda s: (full(s), s != near, max(y - row, below[s])))
+        below[side] = max(y - row, below[side]) + tall
+        out.append((a.xref, first, color, side, a.info.get("content", "")))
     return out
 
 
 def has_comments(file, mtime, doc):
-    return cached(sheets, (file, mtime, "any"), lambda: any(is_comment(a) for p in doc for a in p.annots()))
+    return fact(file, mtime, "any", lambda: any(is_comment(a) for p in doc for a in p.annots()))
 
 
-def sheet(file, mtime, p, found):
-    """p with a line from each of its comments to its text's side."""
-    if not found:
-        return p
+def sheet(file, mtime, p):
+    """p with its comments baked into its content, to show with it."""
 
     def make():
-        pw, ph = p.rect.width, p.rect.height
         one = fitz.open()
         one.insert_pdf(p.parent, from_page=p.number, to_page=p.number)
-        one.bake()  # its comments into its content, to show with it
-        out = fitz.open()
-        s = out.new_page(width=pw, height=ph)
-        s.show_pdf_page(s.rect, one, 0)
-        for _, first, color, side in found:
-            y = first.y1 + 1
-            at, edge = (first.x0, 0) if side == "left" else (first.x1, pw)
-            dark = tuple(c * 0.75 for c in color)
-            s.draw_line(fitz.Point(at, y), fitz.Point(edge, y), color=dark, width=0.6, dashes="[2 1.5] 0")
-        return out, s  # out kept alive with s
+        one.bake()
+        return one, one[0]  # one kept alive with its page
 
-    return cached(sheets, (file, mtime, p.number, sides_of(found)), make)[1]
+    return cached(sheets, (file, mtime, p.number), make)[1]
 
 
-def sides_of(found):
-    return "".join(f[3][0] for f in found)
+def link(pix, scale, row, color, at, edge, y):
+    """On pix, a dashed line in color from (at, y) toward the page's edge at
+    x edge, ending on the middle of y's row (pix's rows row pixels tall), where
+    the comment's line beside the page goes on from: it bends to it just
+    inside the edge, in the page's margin, off the text."""
+    mid = y // row * row + row // 2
+    thick = max(1, round(0.6 * scale))
+    on, off = max(2, round(2 * scale)), max(1, round(1.5 * scale))
+    bend = edge - round(3 * scale) if edge > at else edge + round(3 * scale)
+    dark = tuple(round(c * 191) for c in color)
+    if max(y, mid) + thick <= 0 or min(y, mid) >= pix.height:
+        return  # not on pix: a strip of rows above or below it
+
+    def fill(x0, y0, x1, y1):
+        box = fitz.IRect(min(x0, x1), min(y0, y1), max(x0, x1) + thick, max(y0, y1) + thick) & pix.irect
+        if not box.is_empty:
+            pix.set_rect(box, dark)
+
+    step = 1 if bend > at else -1
+    for x in range(at, bend, step * (on + off)):
+        fill(x, y, x + step * (on - 1), y)
+    fill(bend, y, bend, mid)
+    fill(bend, mid, edge, mid)
 
 
 def sizes(file, mtime, doc):
     """Each page's rect, in points."""
-    return cached(sheets, (file, mtime, "sizes"), lambda: [q.rect for q in doc])
+    return fact(file, mtime, "sizes", lambda: [q.rect for q in doc])
+
+
+def fits(p, scale):
+    """Whether p is drawn whole at scale, to cut views from."""
+    return p.rect.width * p.rect.height * scale * scale <= MAX_PIXELS
+
+
+def draw_ahead(r, mtime, doc, scale, links, near):
+    """Ahead of the view: the pages near, nearest first, drawn and laid out
+    one step at a time, each a function for the idle loop."""
+    del ahead[:]
+    for n in near:
+        if 0 <= n < doc.page_count and fits(doc[n], scale):
+            def step(n=n):
+                p = doc[n]
+                marks(r["file"], mtime, p, links, scale)
+                src = sheet(r["file"], mtime, p) if links else p
+                ahead.insert(0, lambda: whole_page(r["file"], mtime, p, bool(links), src, scale))
+            ahead.append(step)
 
 
 def piece(r, mtime, p, scale, links, rect):
     """The part rect (in p's pixels at scale) of p drawn, with its comments'
     links, origin at rect's corner; and p's marks."""
-    found = marks(p, links, scale)
-    src = sheet(r["file"], mtime, p, found) if links else p
-    if p.rect.width * p.rect.height * scale * scale <= MAX_PIXELS:
-        page = whole_page(r["file"], mtime, p, links and sides_of(found), src, scale)
+    found = marks(r["file"], mtime, p, links, scale)
+    src = sheet(r["file"], mtime, p) if links else p
+    if fits(p, scale):
+        page = whole_page(r["file"], mtime, p, bool(links), src, scale)
         pix = fitz.Pixmap(fitz.csRGB, rect & page.irect, False)
         pix.copy(page, pix.irect)
     else:
@@ -454,11 +518,19 @@ def render(r):
                 part.invert_irect(box)
         part.set_origin(part.x - px, part.y + tops[n] - py)
         pix.copy(part, part.irect)
+        for _, first, color, side, _ in found if links else []:
+            x0, x1 = (first.x0, 0) if side == "left" else (first.x1, rects[n].width)
+            link(pix, scale, links["row"], color, round(x0 * scale) - px, round(x1 * scale) - px,
+                 round(tops[n] + (first.y1 + 1) * scale) - py)
         pages.append(dict(page=n, top=tops[n], marks=[
-            dict(id=a.xref, y=first.y1 + 1, side=side, content=a.info.get("content", ""),
+            dict(id=xref, y=first.y1 + 1, side=side, content=content,
                  color="#%02x%02x%02x" % tuple(round(c * 255) for c in color))
-            for a, first, color, side in found]))
+            for xref, first, color, side, content in found]))
     pix.save(r["out"])
+    # next, the pages it goes on to: below first, as reading goes
+    seen = [g["page"] for g in pages]
+    draw_ahead(r, mtime, doc, scale, links, [seen[-1] + 1, seen[0] - 1, seen[-1] + 2] if continuous else
+               [p.number + 1, p.number - 1])
     # the page at the view's top, and where in it
     at = max((n for n in shown if tops[n] <= py), key=lambda n: tops[n])
     reply["tops"] = [tops[n] for n in shown] if continuous and "scale" not in r else None
@@ -621,8 +693,29 @@ def apply(r):
 
 ops = dict(render=render, comments=comments, at=at, apply=apply, move=move)
 
-for line in sys.stdin:
-    r = json.loads(line)
+def requests():
+    """Each request as it comes; once none has for a moment (not to hold up
+    the next while scrolling), a step of what is ahead."""
+    got = b""
+    while True:
+        if b"\n" in got:
+            line, got = got.split(b"\n", 1)
+            yield json.loads(line)
+        elif ahead and not select.select([0], [], [], IDLE)[0]:
+            try:
+                ahead.pop(0)()
+            except Exception:
+                del ahead[:]
+        else:
+            more = os.read(0, 1 << 16)
+            if not more:
+                return
+            got += more
+
+
+for r in requests():
+    if r.get("op", "render") != "render":
+        del ahead[:]  # an edit: what is ahead may be stale
     try:
         reply = ops[r.get("op", "render")](r)
     except Exception as e:

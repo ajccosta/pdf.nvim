@@ -44,8 +44,8 @@ In a PDF's window:
   drag                          select the text from there to the mouse
   `c`                             comment on the text selected; else, on a
                                 comment, edit it; else comment at the cursor
-                                (at the top of what shows once scrolled away); in a
-                                buffer below the page, see |pdf.nvim-comments|
+                                (at the top of what shows once scrolled away); in
+                                its box beside the page, see |pdf.nvim-comments|
   `x`                             delete the comment under the cursor
   <Esc>                         let go of the selection
   `C`                             open or close the comments list
@@ -78,14 +78,24 @@ per action in `keys` (|pdf.nvim-setup|).
 Comments are the PDF's own notes (text annotations), saved in the file, so
 Preview, Skim and Acrobat show them too; any annotation with text counts. The
 page shows them where they sit, and the window has their text beside it:
-each on the row of what it is on (or below the one before on its side),
-joined to it by a line in its colour. With room on both sides of the page (it
-sits in the middle, |:PdfPosition|), each goes on the side where it stays
-nearest its row, else the side of the page it is on. `m` hides or shows
-them; the page takes the room back. Zoomed in, they get only the room the
-page leaves them, and hide when that is under `notes_min_width` columns;
-fitting the width, only what leaves the page taller than the window, so it
-still scrolls by rows.
+each in a box in its colour, joined by a line in that colour to the row of
+what it is on. The boxes of a side spread over all of the window's height,
+each as near its row as the others let it, above or below; a line that has
+to go up or down to its box does so in a lane of its own, so lines never
+cross or merge. Each shows at most `notes_lines` rows of its text, fewer when
+that is what fits them all in the window (the rest ends in …; `c` on the
+comment shows all of it). On the page, the line bends in its margin to the
+middle of the row the line beside it is on. With room on both sides of the
+page (it sits in the middle, |:PdfPosition|), each goes on the side of the
+page it is on, so its line crosses as little of the page as it can, unless
+that side has no room left beside the page.
+`m` hides or shows them; the page takes the room back. Zoomed in, they get
+only the room the page leaves them, and hide when that is under
+`notes_min_width` columns; fitting the width, only what leaves the page
+taller than the window, so it still scrolls by rows. Where the page
+leaves more room beside it, they widen into it, up to `notes_max_width`
+columns, keeping `notes_gutter` columns between them and the page for
+their lines.
 A PDF without comments keeps all of the window. The text's colour is
 `PdfNote`.
 
@@ -94,8 +104,11 @@ line has it), then `c` comments on it: the comment is saved as a highlight of
 that text, with the comment as its note. Without a selection `c` comments at
 the cursor. New comments get the colour |:PdfColor| chose.
 
-A comment is written in a buffer of its own below the PDF, as any text: `:w`
-saves it into the PDF, `:d` deletes it, and `:q` closes it. A new
+A comment is written where it shows: its box beside the page opens, as tall
+as all of its text, and you edit it there as any text: `:w` saves it into the
+PDF, `:x` (or `:wq`) saves and closes it, `:q` closes it and `:d` deletes it.
+A new one opens beside its row on the right; with no room beside the page,
+in a buffer below the PDF (`editor_height` rows at most). A new
 one starts in Insert mode. `c` with the cursor on a comment edits it there;
 so does a click on a note, or on a comment's text beside the page, and a
 double-click on a highlight (a single click on one moves the cursor and shows
@@ -188,6 +201,10 @@ hints. <CR> on a comment shows it in the PDF's window.
     notes_width = 40,     -- columns beside the page (each side) for its
                           -- comments' text; 0: none
     notes_min_width = 12, -- zoomed in, less room than this: no text
+    notes_max_width = 80, -- with more room beside the page, up to this
+    notes_gutter = 8,     -- columns kept between the page and them
+    notes_lines = 3,      -- rows of each comment's text beside the
+                          -- page, at most; 0: all of it
     color = 'blue',       -- new comments' colour; see :PdfColor
     colors = { blue = '#89b4fa' },  -- names for colours, added to these
     keys = { next = { 'n' } },  -- per action, replaces its keys

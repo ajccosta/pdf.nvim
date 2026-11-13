@@ -69,12 +69,12 @@ Comments are the PDF's own notes (annotations), saved in the file, so Preview,
 Skim and Acrobat show them too, and they show here on the page. Press `c` to
 add one at the cursor, or select text first (`v`, or a drag) to comment on it:
 it shows selected while you write, and is saved highlighted. The comment
-opens in a buffer below the PDF, written as any text in Vim: `:w` saves it in
-the PDF, `:d` deletes it, and `:q` closes it. `c` on a comment, a
+opens in its box beside the page, as tall as all of it, written as any text in Vim: `:w` saves it in
+the PDF, `:x` saves and closes it, `:q` closes it, and `:d` deletes it. `c` on a comment, a
 click on a note or on a comment's text beside the page, or a double-click on a
 highlight opens it there to edit; `x` deletes it. Each comment's text shows
-beside the page, as text in the window, on the row of what it is on and
-joined to it by a line, on whichever side it fits best, in the room the page leaves (zoomed in,
+beside the page, as text in the window, in a box as near the row of what it is on as the others let it,
+joined to it by a line that never crosses another, on the side of the page it is on while that has room, at most `notes_lines` rows of it (fewer when that fits them all), in the room the page leaves (zoomed in,
 it may leave none; fitting the width, the page stays taller than the window); `m` hides or shows them.
 They are standard PDF comments, each with its popup, page and dates, so other
 readers (Preview, Acrobat, Chrome, Firefox) open them with a click; saving
@@ -110,6 +110,9 @@ require('pdf').setup({
   comments_width = 40, -- the comments list's window
   notes_width = 40,     -- columns beside the page for comments (0: none)
   notes_min_width = 12, -- zoomed in, less room than this: no comments' text
+  notes_max_width = 80, -- with more room beside the page, they widen up to this
+  notes_gutter = 8,     -- columns kept between the page and comments, for lines
+  notes_lines = 3,      -- rows of each comment's text beside the page (0: all)
   color = 'blue',       -- new comments' colour: a name in colors, or '#rrggbb'
   colors = { blue = '#89b4fa' },  -- names for colours, added to the defaults
   position = { 'right', 'center' },  -- where a page smaller than the window sits

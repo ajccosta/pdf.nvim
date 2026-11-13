@@ -62,11 +62,16 @@ local function start()
       if not data then
         return
       end
-      renderer.out = renderer.out .. data
-      for line in renderer.out:gmatch('([^\n]*)\n') do
-        on_reply(line)
+      -- each line a reply, found by plain finds: a pattern tries each start
+      -- to the line's end, and with its comments' text a reply is long
+      local out, from = renderer.out .. data, 1
+      local nl = out:find('\n', from, true)
+      while nl do
+        on_reply(out:sub(from, nl - 1))
+        from = nl + 1
+        nl = out:find('\n', from, true)
       end
-      renderer.out = renderer.out:match('[^\n]*$')
+      renderer.out = out:sub(from)
     end),
     stderr = vim.schedule_wrap(function(_, data)
       if data and data ~= '' then
@@ -112,8 +117,33 @@ function R.op(req, cb, always)
   end)
 end
 
+-- One synchronized update: the terminal shows nothing of it until it ends.
+local hold, release = '\027[?2026h', '\027[?2026l'
+local framed = false
+
+-- frame(f): what f sends and nvim redraws meanwhile, shown all at once when
+-- it is done. nvim's own synchronized updates are off meanwhile: each of its
+-- flushes would end the frame.
+function R.frame(f)
+  if framed then
+    return f()
+  end
+  local sync = vim.o.termsync
+  vim.o.termsync = false
+  vim.api.nvim_ui_send(hold)
+  framed = true
+  local ok, err = pcall(f)
+  framed = false
+  vim.api.nvim__redraw({ flush = true })
+  vim.api.nvim_ui_send(release)
+  vim.o.termsync = sync
+  if not ok then
+    error(err, 0)
+  end
+end
+
 -- send(png, box, before): draw png in box's cells, after the escapes before;
--- one synchronized update, so rows before moves show only with png in them.
+-- in a frame, so rows before moves show only with png in them.
 function R.send(png, box, before)
   local f = io.open(png, 'rb')
   if not f then
@@ -121,9 +151,11 @@ function R.send(png, box, before)
   end
   local data = vim.base64.encode(f:read('*a'))
   f:close()
-  vim.api.nvim_ui_send(string.format(
-    '\027[?2026h\0277%s\027[%d;%dH\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\007\0278\027[?2026l',
-    before or '', box.row, box.col, box.w, box.h, data))
+  R.frame(function()
+    vim.api.nvim_ui_send(string.format(
+      '\0277%s\027[%d;%dH\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\007\0278',
+      before or '', box.row, box.col, box.w, box.h, data))
+  end)
 end
 
 return R

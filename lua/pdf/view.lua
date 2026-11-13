@@ -74,7 +74,9 @@ local function draw(win, clear, scale)
   -- comments go left of the page too when it leaves room for them there
   local sides = math.min(math.floor((all - cols) * across), all - notes_cols - cols) >= notes_cols
     and { 'left', 'right' } or { 'right' }
-  local links = notes_cols > 0 and { cols = notes_cols, sides = sides } or nil
+  local links = notes_cols > 0 and {
+    cols = notes_cols, sides = sides, lines = config.notes_lines > 0 and config.notes_lines or nil,
+  } or nil
   if cols < 1 or rows < 1 then
     return
   end
@@ -206,12 +208,15 @@ local function pump(win)
     return
   end
   local d = (sh.target - sh.py) / sh.rpx
-  if d ~= math.floor(d) or math.abs(d) >= sh.rows then
-    -- not whole rows, or more than the window: all of it again
+  if d ~= math.floor(d) then
+    -- not whole rows: all of it again
     return draw(win, false, config.scale)
   end
+  -- more than the window: still by rows, as many as it can at a time; a
+  -- whole frame costs the terminal as much, and wipes the screen too
+  d = math.max(-(sh.rows - 1), math.min(d, sh.rows - 1))
   sh.busy = true
-  local py = d > 0 and sh.py + sh.rows * sh.rpx or sh.target
+  local py = d > 0 and sh.py + sh.rows * sh.rpx or sh.py + d * sh.rpx
   local h = math.abs(d) * sh.rpx
   renderer.request(vim.tbl_extend('force', {
     id = win, file = sh.file, page = sh.page, scale = sh.scale,
@@ -226,18 +231,21 @@ local function pump(win)
       return draw(win, false, config.scale)
     end
     -- the comments' text moves with the lines too, where nvim does not know:
-    -- gone from the screen first, to draw it again where it goes
-    notes.clear(win)
-    vim.api.nvim__redraw({ flush = true })
-    local b = sh.box
-    renderer.send(sh.png, {
-      row = d > 0 and b.row + b.h - d or b.row, col = b.col, w = b.w, h = math.abs(d),
-    }, roll(sh, d))
-    sh.py = sh.py + d * sh.rpx
-    for _, g in ipairs(r.pages) do
-      sh.pages[g.page] = g
-    end
-    notes.draw(win, sh)
+    -- gone first, to draw it again where it goes, all in one frame so it
+    -- never shows gone
+    renderer.frame(function()
+      notes.clear(win)
+      vim.api.nvim__redraw({ flush = true })
+      local b = sh.box
+      renderer.send(sh.png, {
+        row = d > 0 and b.row + b.h - d or b.row, col = b.col, w = b.w, h = math.abs(d),
+      }, roll(sh, d))
+      sh.py = sh.py + d * sh.rpx
+      for _, g in ipairs(r.pages) do
+        sh.pages[g.page] = g
+      end
+      notes.draw(win, sh)
+    end)
     if vim.api.nvim_get_current_win() == win then
       status(vim.b.pdf)
     end

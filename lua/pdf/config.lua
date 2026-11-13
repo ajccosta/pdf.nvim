@@ -23,9 +23,12 @@ return {
   wheel = 0.05, -- and a wheel tick this much
   zoom = 1.25, -- a zoom in or out multiplies by this
   comments_width = 40, -- the comments list's window, in columns
-  editor_height = 8, -- at most this many lines for a comment being edited
+  editor_height = 8, -- at most this many lines for a comment edited below the PDF (no room beside it)
   notes_width = 40, -- columns each side of the page for its comments; 0: none
   notes_min_width = 12, -- zoomed in, fewer than this left beside the page: none
+  notes_max_width = 80, -- with more room beside the page, they take up to this
+  notes_gutter = 8, -- of that room, the columns left between page and comments
+  notes_lines = 3, -- rows of each comment's text beside the page, at most; 0: all
   -- new comments' colour: a name from colors or "#rrggbb"; see :PdfColor
   color = 'blue',
   colors = {
