@@ -29,12 +29,7 @@ end
 -- show_comment(c): c's text in the message line, or what a click is for.
 local function show_comment(c)
   local msg = c and table.concat(text(c.content), ' / ') or 'c comments here, a drag or v selects text'
-  local room = vim.v.echospace - 30
-  if vim.fn.strdisplaywidth(msg) > room then
-    msg = vim.fn.strcharpart(msg, 0, room - 1) .. '…'
-  end
-  vim.api.nvim_echo({ { c and 'comment (c or a double click edits, x deletes): ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } },
-    false, {})
+  util.say({ { c and 'comment (c or a double click edits, x deletes): ' or 'pdf.nvim: ', c and 'Title' or 'None' }, { msg } })
 end
 
 -- point(m): a click: the cursor goes there, where a drag selecting text

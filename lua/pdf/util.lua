@@ -51,4 +51,30 @@ function U.buf_win(buf)
   end
 end
 
+-- say(chunks): nvim_echo's chunks on one line, cut with "…" to fit what the
+-- message line has (v:echospace): a longer message, or a line break in it,
+-- brings the hit-enter prompt, where nvim stops reporting the mouse.
+function U.say(chunks)
+  local room, out = vim.v.echospace, {}
+  for i, c in ipairs(chunks) do
+    local t = c[1]:gsub('%s+', ' ')
+    local w = vim.fn.strdisplaywidth(t)
+    -- all of room taken before the last chunk leaves none for its "…"
+    if w > room or (w == room and i < #chunks) then
+      local cut = ''
+      for _, ch in ipairs(vim.fn.split(t, [[\zs]])) do
+        if vim.fn.strdisplaywidth(cut .. ch) > room - 1 then
+          break
+        end
+        cut = cut .. ch
+      end
+      out[#out + 1] = { cut .. '…', c[2] }
+      break
+    end
+    room = room - w
+    out[#out + 1] = { t, c[2] }
+  end
+  vim.api.nvim_echo(out, false, {})
+end
+
 return U

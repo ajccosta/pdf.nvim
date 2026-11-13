@@ -8,12 +8,12 @@ local V = {}
 local function status(st)
   if st.selected then
     local t = vim.fn.strcharpart(st.selected, 0, 50)
-    return vim.api.nvim_echo({ { string.format('selected "%s%s": c comments on it, y copies it, <Esc> lets go', t,
-      t == st.selected and '' or '…') } }, false, {})
+    return util.say({ { string.format('selected "%s%s": c comments on it, y copies it, <Esc> lets go', t,
+      t == st.selected and '' or '…') } })
   end
   local zoom = math.abs(st.zoom - 1) < 0.01 and '' or string.format('  %d%%', st.zoom * 100)
   local notes = (st.notes or 0) > 0 and string.format('  %d comment%s', st.notes, st.notes > 1 and 's' or '') or ''
-  vim.api.nvim_echo({ { string.format('page %d/%d%s%s', st.page + 1, st.count or 0, zoom, notes) } }, false, {})
+  util.say({ { string.format('page %d/%d%s%s', st.page + 1, st.count or 0, zoom, notes) } })
 end
 
 -- draw(win, clear, scale): render win's page and draw it. nvim's own redraw

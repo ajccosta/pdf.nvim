@@ -2,6 +2,7 @@
 -- T, v V and y, and c on it.
 local comments = require('pdf.comments')
 local renderer = require('pdf.renderer')
+local util = require('pdf.util')
 local view = require('pdf.view')
 local K = {}
 
@@ -215,7 +216,7 @@ function K.yank()
     reg = vim.list_contains(cb, 'unnamedplus') and '+' or vim.list_contains(cb, 'unnamed') and '*' or reg
   end
   vim.fn.setreg(reg, st.selected)
-  vim.api.nvim_echo({ { string.format('copied "%s"', vim.fn.strcharpart(st.selected, 0, 50)) } }, false, {})
+  util.say({ { string.format('copied "%s"', vim.fn.strcharpart(st.selected, 0, 50)) } })
   forget(vim.api.nvim_get_current_buf())
 end
 
