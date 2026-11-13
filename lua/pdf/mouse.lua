@@ -57,7 +57,7 @@ function P.point(m)
   end
   st.cursor, st.want = p, nil
   vim.b.pdf = st
-  view.redraw()
+  view.mark()
   op({ op = 'at', file = st.file, page = p.page, x = p.x, y = p.y }, function(r)
     -- a note's icon is for its text; a highlight's text, to select too
     if r.comment and r.comment.type == 'Text' then
@@ -74,7 +74,7 @@ function P.drag(m)
   if from and p and p.page == from.page then
     st.visual, st.cursor = st.visual or { page = from.page, x = from.x, y = from.y }, p
     vim.b.pdf = st
-    view.redraw()
+    view.mark()
   end
 end
 

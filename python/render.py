@@ -18,17 +18,25 @@
 # writes a PNG at out, at most width x height. With "select" {"page", "a",
 # "b"} ({"x", "y"} on that page, in points; "lines": true for whole lines),
 # the text from a to b shows selected, and the reply's "selected" has it;
-# else with "cursor" {"page", "x", "y"}, the character there shows as a
-# block. With "links": {"cols": the
-# text's width, "row": a row's height in pixels, "sides": ["left", "right"] or
-# one, "lines": the most rows a comment's text takes, or none for all}, each
+# with "cursor" {"page", "x", "y"}, the character there shows the cursor.
+# They look as "look" says: {"visual": {"fg", "bg"}: selected text's ink and
+# paper, "cursor": {"fg", "bg", "shape": "block", "ver" or "hor", "size": of a
+# bar, in percent of the character}}, as Vim's Visual and Cursor and the
+# 'guicursor' shape. With "strip" {"row": a row's height in pixels, "keep":
+# [y0, y1] or null, the pixel rows marked before, as "marked" has them}, the
+# image is only the whole rows of the view those and the ones marked now
+# cross, and the reply's "strip" [r0, r1] says which rows it is (null: none).
+# With "links": {"cols": the text's width, "row": a row's height in pixels,
+# "sides": ["left", "right"] or one, "lines": the most rows a comment's text
+# takes, or none for all}, each
 # comment goes on the side of the page it is on, a line from it to that edge.
 #
 # The reply: {"id", "count" (pages), "page" (the one at the view's top), "iw",
 # "ih" (the image's size), "x", "y" (where in page the view starts, kept in
 # the document), "mx", "my" (the most they can be), "vw", "vh" (the window's
 # size), "pw", "ph" (page's size), all in points, "zoom", "scale", "px", "py",
-# "pxw", "pxh" (all that can show, in pixels), "tops" (continuous, at a zoom:
+# "pxw", "pxh" (all that can show, in pixels), "marked" ([y0, y1]: the pixel
+# rows, as py counts them, the selection and the cursor take, or null), "tops" (continuous, at a zoom:
 # each page's top in pixels), "pages" (those the image shows, each {"page",
 # "top", "marks"}), "notes" (comments on page), "marks" (page's), "commented"
 # (whether any page has one)}. Marks are a page's comments, top to bottom,
@@ -56,12 +64,16 @@ import json
 import os
 import re
 import select
+import struct
 import sys
+import unicodedata
 import uuid
+import zlib
 
 import fitz
 
 docs = {}  # by file: (mtime, document)
+readables = {}  # by file: (mtime, document), to read text from (readable())
 pages = {}  # (file, mtime, page, links, scale): the whole page drawn
 sheets = {}  # (file, mtime, page): the page with its comments baked in, to draw
 texts = {}  # (file, mtime, page): its Text
@@ -97,8 +109,12 @@ def fact(file, mtime, what, make):
     return facts[key]
 
 
+def page_key(file, mtime, p, links, scale):
+    return (file, mtime, p.number, links, round(scale, 6))
+
+
 def whole_page(file, mtime, p, links, sheet, scale):
-    return cached(pages, (file, mtime, p.number, links, round(scale, 6)),
+    return cached(pages, page_key(file, mtime, p, links, scale),
                   lambda: sheet.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False))
 
 
@@ -113,10 +129,18 @@ class Text:
         for b in p.get_text("rawdict")["blocks"]:
             for l in b.get("lines", []):
                 first = len(self.chars)
+                across = abs(l["dir"][1]) < 0.01
                 for s in l["spans"]:
                     for c in s["chars"]:
                         raw = fitz.Rect(c["bbox"])
-                        self.chars.append((raw * p.rotation_matrix, raw, c["c"], len(self.lines)))
+                        last = self.chars[-1] if len(self.chars) > first else None
+                        # a gap with no space in it (a font's change: "A and"
+                        # with A in math) one, as it reads
+                        if (across and last and not last[2].isspace() and not c["c"].isspace()
+                                and abs(raw.x0 - last[1].x1) > 0.15 * s["size"]):
+                            gap = fitz.Rect(min(last[1].x1, raw.x0), last[1].y0, max(last[1].x1, raw.x0), last[1].y1)
+                            self.chars.append((gap * p.rotation_matrix, gap, " ", len(self.lines)))
+                        self.chars.append((raw * p.rotation_matrix, raw, plain(c["c"]), len(self.lines)))
                 if len(self.chars) > first:
                     self.lines.append((first, len(self.chars)))
                     self.blocks.append(b["number"])
@@ -129,12 +153,93 @@ class Text:
         return self.near[key]
 
     def search(self, pt):
-        return min(range(len(self.chars)),
-                   key=lambda i: 0 if pt in self.chars[i][0] else pt.distance_to(self.chars[i][0]))
+        # in plain numbers: fitz's Rect and Point per character take a tenth
+        # of a second a page
+        if not hasattr(self, "boxes"):
+            self.boxes = [tuple(c[0]) for c in self.chars]
+        x, y = pt.x, pt.y
+
+        def distance(i):
+            x0, y0, x1, y1 = self.boxes[i]
+            dx, dy = max(x0 - x, 0, x - x1), max(y0 - y, 0, y - y1)
+            return dx * dx + dy * dy
+
+        return min(range(len(self.boxes)), key=distance)
 
 
 def page_text(file, mtime, p):
-    return cached(texts, (file, mtime, p.number), lambda: Text(p))
+    return cached(texts, (file, mtime, p.number), lambda: Text(readable(file, mtime)[p.number]))
+
+
+def plain(c):
+    """c as text to copy: a ligature as its letters, a math letter (italic
+    A, bold x, ...) as the letter, the math alphabet's holes too (italic h is
+    U+210E, its slot U+1D455 empty)."""
+    n = ord(c)
+    if 0xFB00 <= n <= 0xFB06 or 0x1D400 <= n <= 0x1D7FF:
+        try:
+            unicodedata.name(c)
+            return unicodedata.normalize("NFKC", c)
+        except ValueError:
+            if n < 0x1D6A4:
+                k = (n - 0x1D400) % 52
+                return chr((0x41 if k < 26 else 0x61 - 26) + k)
+    return c
+
+
+def glyph_text(name):
+    """The text a glyph's name stands for ("f_i": fi, "u1D434": italic A as
+    A, "h.sc": h), or None for a name that says nothing ("g12")."""
+    out = ""
+    for part in name.split("_"):
+        u = fitz.mupdf.fz_unicode_from_glyph_name(part)
+        if u in (0, 0xFFFD):
+            return None
+        out += plain(chr(u))
+    return out or None
+
+
+def readable(file, mtime):
+    """The document again, to read text from: in its fonts that name their
+    glyphs (an encoding's Differences) and also map them to text (ToUnicode),
+    the names win. A font subset and re-encoded can keep the map of the codes
+    it had (LaTeX's Libertine: "fi" read as "!"). Only read, never saved."""
+
+    def make():
+        doc = fitz.open(file)
+        for x in range(1, doc.xref_length()):
+            if doc.xref_get_key(x, "Type")[1] != "/Font" or doc.xref_get_key(x, "ToUnicode")[0] != "xref":
+                continue
+            enc = doc.xref_get_key(x, "Encoding")
+            diff = (doc.xref_object(int(enc[1].split()[0])) if enc[0] == "xref" else doc.xref_object(x))
+            found = re.search(r"/Differences\s*\[([^\]]*)\]", diff)
+            if not found:
+                continue
+            names, code = {}, 0
+            for tok in found.group(1).split():
+                if tok.startswith("/"):
+                    names[code], code = tok[1:], code + 1
+                elif tok.isdigit():
+                    code = int(tok)
+            texts = {c: glyph_text(n) for c, n in names.items()}
+            if not texts or None in texts.values():
+                continue
+            pairs = ["<%02x> <%s>" % (c, t.encode("utf-16-be").hex()) for c, t in sorted(texts.items()) if c < 256]
+            chunks = ["%d beginbfchar\n%s\nendbfchar" % (len(pairs[i:i + 100]), "\n".join(pairs[i:i + 100]))
+                      for i in range(0, len(pairs), 100)]
+            cmap = ("/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n"
+                    "/CMapName /pdfnvim def /CMapType 2 def\n1 begincodespacerange <00> <ff> endcodespacerange\n"
+                    + "\n".join(chunks)
+                    + "\nendcmap CMapName currentdict /CMap defineresource pop end end\n")
+            new = doc.get_new_xref()
+            doc.update_object(new, "<<>>")
+            doc.update_stream(new, cmap.encode())
+            doc.xref_set_key(x, "ToUnicode", "%d 0 R" % new)
+        return doc
+
+    if file not in readables or readables[file][0] != mtime:
+        readables[file] = (mtime, make())
+    return readables[file][1]
 
 
 def selection(file, mtime, p, sel):
@@ -414,12 +519,23 @@ def link(pix, scale, row, color, at, edge, y):
 
     def fill(x0, y0, x1, y1):
         box = fitz.IRect(min(x0, x1), min(y0, y1), max(x0, x1) + thick, max(y0, y1) + thick) & pix.irect
-        if not box.is_empty:
-            pix.set_rect(box, dark)
+        paint(pix, box, dark)
 
-    step = 1 if bend > at else -1
-    for x in range(at, bend, step * (on + off)):
-        fill(x, y, x + step * (on - 1), y)
+    # the dashes, in one go: the strip under them taken, dashed, put back
+    lo, hi = min(at, bend), max(at, bend)
+    box = fitz.IRect(lo, y, hi, y + thick) & pix.irect
+    if not box.is_empty:
+        under = fitz.Pixmap(fitz.csRGB, box, False)
+        under.copy(pix, box)
+        rows, stride, step = bytearray(under.samples), under.stride, 1 if bend > at else -1
+        for x in range(at, bend, step * (on + off)):
+            a = max(min(x, x + step * (on - 1)), box.x0) - box.x0
+            b = min(max(x, x + step * (on - 1)) + thick, box.x1) - box.x0
+            for r in range(box.height) if a < b else []:
+                rows[r * stride + a * 3:r * stride + b * 3] = bytes(dark) * (b - a)
+        dashed = fitz.Pixmap(fitz.csRGB, box.width, box.height, bytes(rows), False)
+        dashed.set_origin(box.x0, box.y0)
+        pix.copy(dashed, box)
     fill(bend, y, bend, mid)
     fill(bend, mid, edge, mid)
 
@@ -434,11 +550,13 @@ def fits(p, scale):
     return p.rect.width * p.rect.height * scale * scale <= MAX_PIXELS
 
 
-def draw_ahead(r, mtime, doc, scale, links, near):
-    """Ahead of the view: the pages near, nearest first, drawn and laid out
-    one step at a time, each a function for the idle loop."""
+def draw_ahead(r, mtime, doc, scale, links, near, seen):
+    """Ahead of the view: the pages seen drawn whole (a view only drew its
+    part), and their text, for the cursor's first move; then the pages near,
+    nearest first, laid out and drawn; one step at a time, each a function
+    for the idle loop."""
     del ahead[:]
-    for n in near:
+    for n in seen + near:
         if 0 <= n < doc.page_count and fits(doc[n], scale):
             def step(n=n):
                 p = doc[n]
@@ -446,6 +564,8 @@ def draw_ahead(r, mtime, doc, scale, links, near):
                 src = sheet(r["file"], mtime, p) if links else p
                 ahead.insert(0, lambda: whole_page(r["file"], mtime, p, bool(links), src, scale))
             ahead.append(step)
+        if n in seen:
+            ahead.append(lambda n=n: page_text(r["file"], mtime, doc[n]))
 
 
 def piece(r, mtime, p, scale, links, rect):
@@ -453,7 +573,9 @@ def piece(r, mtime, p, scale, links, rect):
     links, origin at rect's corner; and p's marks."""
     found = marks(r["file"], mtime, p, links, scale)
     src = sheet(r["file"], mtime, p) if links else p
-    if fits(p, scale):
+    # the whole page when drawn already; else only the part, quicker, the
+    # whole drawn while idle
+    if fits(p, scale) and page_key(r["file"], mtime, p, bool(links), scale) in pages:
         page = whole_page(r["file"], mtime, p, bool(links), src, scale)
         pix = fitz.Pixmap(fitz.csRGB, rect & page.irect, False)
         pix.copy(page, pix.irect)
@@ -493,30 +615,35 @@ def render(r):
     else:
         px, py = round(float(r["x"]) * scale), tops[p.number] + round(float(r["y"]) * scale)
     px, py = max(0, min(px, pxw - w)), max(0, min(py, pxh - h))
+    strip = r.get("strip")
+    if strip:
+        # only the rows the selection and the cursor take, and took
+        now, row = marked(r, mtime, doc, scale, tops), int(strip["row"])
+        band = [m for m in (now, strip.get("keep")) if m]
+        r0 = max(0, (min(b[0] for b in band) - py) // row) if band else 0
+        r1 = min(h // row, -(-(max(b[1] for b in band) - py) // row)) if band else 0
+        if r1 <= r0:
+            return dict(marked=now, strip=None)
+        return dict(render(dict(r, strip=None, py=py + r0 * row, height=(r1 - r0) * row)), strip=[r0, r1])
     # filled from bytes: set_rect fills pixel by pixel in Python, seconds a view
     bg = r.get("bg", "#000000")
     pix = fitz.Pixmap(fitz.csRGB, w, h, bytes.fromhex(bg[1:]) * (w * h), False)
-    reply, pages = {}, []
+    reply, pages = {"marked": marked(r, mtime, doc, scale, tops)}, []
     sel = r.get("select")
     for n in shown:
         if tops[n] >= py + h or tops[n] + (rects[n] * m).irect.height <= py:
             continue
         q = doc[n]
         part, found = piece(r, mtime, q, scale, links, fitz.IRect(px, py - tops[n], px + w, py - tops[n] + h))
+        look = r.get("look") or {}
         if sel and sel.get("page", n) == n:
             text, boxes, _ = selection(r["file"], mtime, q, sel)
-            for rc in boxes:
-                box = (rc * scale).irect & part.irect
-                if not box.is_empty:
-                    part.invert_irect(box)
+            shade(part, [rc * scale for rc in boxes], look.get("visual"))
             reply["selected"] = text
         cur = r.get("cursor")
-        if cur and not sel and cur.get("page") == n and page_text(r["file"], mtime, q).chars:
-            # the cursor: its character drawn as Vim's block over it
+        if cur and cur.get("page") == n and page_text(r["file"], mtime, q).chars:
             t = page_text(r["file"], mtime, q)
-            box = (t.chars[t.nearest(cur)][0] * scale).irect & part.irect
-            if not box.is_empty:
-                part.invert_irect(box)
+            caret(part, t.chars[t.nearest(cur)][0] * scale, look.get("cursor"))
         part.set_origin(part.x - px, part.y + tops[n] - py)
         pix.copy(part, part.irect)
         for _, first, color, side, _ in found if links else []:
@@ -527,11 +654,11 @@ def render(r):
             dict(id=xref, y=first.y1 + 1, side=side, content=content,
                  color="#%02x%02x%02x" % tuple(round(c * 255) for c in color))
             for xref, first, color, side, content in found]))
-    pix.save(r["out"])
+    save_png(pix, r["out"])
     # next, the pages it goes on to: below first, as reading goes
     seen = [g["page"] for g in pages]
     draw_ahead(r, mtime, doc, scale, links, [seen[-1] + 1, seen[0] - 1, seen[-1] + 2] if continuous else
-               [p.number + 1, p.number - 1])
+               [p.number + 1, p.number - 1], seen)
     # the page at the view's top, and where in it
     at = max((n for n in shown if tops[n] <= py), key=lambda n: tops[n])
     reply["tops"] = [tops[n] for n in shown] if continuous and "scale" not in r else None
@@ -541,6 +668,86 @@ def render(r):
                 x=px / scale, y=(py - tops[at]) / scale, mx=(pxw - w) / scale, my=(pxh - h - tops[at]) / scale,
                 vw=w / scale, vh=h / scale, pw=rects[at].width, ph=rects[at].height,
                 zoom=zoom, scale=scale, px=px, py=py, pxw=pxw, pxh=pxh)
+
+
+def save_png(pix, out):
+    """pix (RGB) as a PNG at out, compressed less than MuPDF does: a third of
+    the time, for a tenth more bytes."""
+    stride, data = pix.stride, pix.samples
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+
+    rows = b"".join(b"\0" + data[y * stride:(y + 1) * stride] for y in range(pix.height))
+    with open(out, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", pix.width, pix.height, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(rows, 1)) + chunk(b"IEND", b""))
+
+
+def marked(r, mtime, doc, scale, tops):
+    """Where r's selection and cursor are: [y0, y1], in pixels from the top
+    of the first page in tops (those shown), or None."""
+    ys = []
+    sel, cur = r.get("select"), r.get("cursor")
+    if sel and sel.get("page") in tops:
+        q = doc[sel["page"]]
+        ys += [(tops[q.number] + b.y0 * scale, tops[q.number] + b.y1 * scale)
+               for b in selection(r["file"], mtime, q, sel)[1]]
+    if cur and cur.get("page") in tops:
+        t = page_text(r["file"], mtime, doc[cur["page"]])
+        if t.chars:
+            b = t.chars[t.nearest(cur)][0]
+            ys.append((tops[cur["page"]] + b.y0 * scale, tops[cur["page"]] + b.y1 * scale))
+    return [int(min(y[0] for y in ys)), -int(-max(y[1] for y in ys))] if ys else None
+
+
+def rgb(color):
+    return int(color[1:], 16)
+
+
+def shade(part, rects, colors):
+    """rects of part drawn as Vim draws text in colors' {"fg", "bg"}: its ink
+    in fg, its paper bg, what is between between them. Each pixel once, where
+    rects overlap (a line's tall letters over the next) too."""
+    colors = colors or {"fg": "#ffffff", "bg": "#000000"}
+    boxes = [b for b in (rc.irect & part.irect for rc in rects) if not b.is_empty]
+    if not boxes:
+        return
+    whole = fitz.IRect(boxes[0])
+    for b in boxes[1:]:
+        whole |= b
+    tinted = fitz.Pixmap(fitz.csRGB, whole, False)
+    tinted.copy(part, whole)
+    tinted.tint_with(rgb(colors["fg"]), rgb(colors["bg"]))
+    for b in boxes:
+        part.copy(tinted, b)
+
+
+def caret(part, rect, look):
+    """The cursor on the character at rect, as Vim's: a block over it in its
+    colours, or a bar ("ver") left of it or under it ("hor"), size percent of
+    it, in its bg."""
+    look = look or {"shape": "block"}
+    shape, size = look.get("shape", "block"), int(look.get("size") or 25) / 100
+    if shape == "ver":
+        rect = fitz.Rect(rect.x0, rect.y0, rect.x0 + max(2, rect.width * size), rect.y1)
+    elif shape == "hor":
+        rect = fitz.Rect(rect.x0, rect.y1 - max(2, rect.height * size), rect.x1, rect.y1)
+    else:
+        return shade(part, [rect], look if "fg" in look else None)
+    c = rgb(look.get("bg", "#000000"))
+    paint(part, rect.irect, (c >> 16, c >> 8 & 255, c & 255))
+
+
+def paint(pix, box, color):
+    """box of pix filled with color (r, g, b): from bytes, as set_rect fills
+    pixel by pixel in Python."""
+    box = fitz.IRect(box) & pix.irect
+    if box.is_empty:
+        return
+    solid = fitz.Pixmap(fitz.csRGB, box.width, box.height, bytes(color) * (box.width * box.height), False)
+    solid.set_origin(box.x0, box.y0)
+    pix.copy(solid, box)
 
 
 def is_comment(a):

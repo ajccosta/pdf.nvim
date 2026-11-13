@@ -250,9 +250,9 @@ function R.clear(win)
 end
 
 -- send(png, box, opts): draw png in box's cells, for window opts.win: all of
--- what it shows, or with opts.roll, a strip of it after the escapes opts.before
--- moved its rows opts.roll up (down when < 0). In a frame, so rows before
--- moves show only with png in them.
+-- what it shows, or a strip of opts.whole (what it shows), with opts.roll
+-- after the escapes opts.before moved its rows opts.roll up (down when < 0).
+-- In a frame, so rows before moves show only with png in them.
 function R.send(png, box, opts)
   local f = io.open(png, 'rb')
   if not f then
@@ -267,12 +267,13 @@ function R.send(png, box, opts)
     vim.api.nvim_ui_send(string.format('\0277%s\027[%d;%dH%s\0278', opts.before or '', box.row, box.col,
       p.image(data, box, id)))
     if p.forget then
-      -- the images moved with the rows, those moved out gone; or all of them
-      -- covered by this one
-      local whole = opts.whole
-      forget(opts.win, opts.roll and function(im)
-        im.row = im.row - opts.roll
+      -- the images moved with the rows (opts.roll), those then out of the
+      -- window's (opts.whole) gone, and those this one covers
+      local whole = opts.whole or box
+      forget(opts.win, function(im)
+        im.row = im.row - (opts.roll or 0)
         return im.row + im.h > whole.row and im.row < whole.row + whole.h
+          and not (im.row >= box.row and im.row + im.h <= box.row + box.h)
       end)
       table.insert(images[opts.win], { id = id, row = box.row, h = box.h })
     end

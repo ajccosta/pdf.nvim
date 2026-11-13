@@ -31,6 +31,52 @@ function V.selected(st)
   return v and c and { page = v.page, a = { x = v.x, y = v.y }, b = { x = c.x, y = c.y }, lines = v.lines } or nil
 end
 
+-- colors(name): highlight group name's { fg, bg } as "#rrggbb", reversed
+-- when it says so; either nil when it has none.
+local function colors(name)
+  local h = vim.api.nvim_get_hl(0, { name = name, link = false })
+  local function hex(c)
+    return c and string.format('#%06x', c)
+  end
+  local fg, bg = hex(h.fg), hex(h.bg)
+  if h.reverse then
+    fg, bg = bg, fg
+  end
+  return { fg = fg, bg = bg }
+end
+
+-- look(st): how the selection and the cursor look on the page, as render
+-- takes it: as Vim's own, in the Visual and Cursor highlights (or Normal's
+-- colours, reversed, where they have none), the cursor's shape as
+-- 'guicursor' has it for Normal mode (Visual's while selecting).
+function V.look(st)
+  local normal = colors('Normal')
+  normal.fg, normal.bg = normal.fg or '#ffffff', normal.bg or '#000000'
+  local visual = colors('Visual')
+  local mode = st.visual and 'v' or 'n'
+  local cursor = { shape = 'block' }
+  local group = 'Cursor'
+  for _, entry in ipairs(vim.split(vim.o.guicursor, ',', { trimempty = true })) do
+    local modes, arg = entry:match('^([^:]+):(.*)$')
+    if modes and vim.list_contains(vim.split(modes, '-'), mode) then
+      for _, part in ipairs(vim.split(arg, '-')) do
+        local shape, size = part:match('^(%a+)(%d*)$')
+        if shape == 'block' or shape == 'ver' or shape == 'hor' then
+          cursor.shape, cursor.size = shape, tonumber(size)
+        elseif part:match('^%u') then
+          group = part:match('^[^/]+')
+        end
+      end
+    end
+  end
+  local c = colors(group)
+  cursor.fg, cursor.bg = c.bg and c.fg or normal.bg, c.bg or normal.fg
+  return {
+    visual = { fg = visual.fg or normal.fg, bg = visual.bg or normal.fg },
+    cursor = cursor,
+  }
+end
+
 -- continuous(st): whether st's pages show stacked, one on from the other.
 function V.continuous(st)
   return config.continuous and st.zoom ~= 1
@@ -48,6 +94,11 @@ function V.page_at(sh, py)
     end
   end
   return page, (py - (sh.tops and sh.tops[page + 1] or 0)) / sh.scale
+end
+
+-- at(st): where st's view is, to tell whether a frame still shows it.
+local function at(st)
+  return { page = st.page, x = st.x, y = st.y, zoom = st.zoom }
 end
 
 local function draw(win, clear, scale)
@@ -91,7 +142,7 @@ local function draw(win, clear, scale)
   renderer.request(vim.tbl_extend('force', {
     id = win, file = st.file, page = st.page, zoom = st.zoom,
     x = st.x, y = st.y, out = png, width = cols * cpx, height = rows * rpx, select = V.selected(st),
-    cursor = st.cursor,
+    cursor = st.cursor, look = V.look(st),
     links = links and vim.tbl_extend('force', links, { row = rpx }),
   }, stack), function(r)
     if r.error then
@@ -129,14 +180,16 @@ local function draw(win, clear, scale)
     shown[win] = {
       file = st.file, page = r.page, scale = r.scale, px = r.px, py = r.py, pxh = r.pxh, tops = r.tops,
       iw = r.iw, rows = rows, cpx = cpx, rpx = rpx, box = box, png = png, select = V.selected(st),
-      cursor = st.cursor,
-      margin = notes_cols, pages = {}, stack = stack,
+      cursor = st.cursor, look = V.look(st),
+      margin = notes_cols, pages = {}, stack = stack, sharp = scale == config.scale,
       links = links and vim.tbl_extend('force', links, { row = rpx }),
       -- only a sharp frame filling the height of a window as wide as the
       -- screen scrolls by rows: whole lines move
       rolls = renderer.protocol().rolls and scale == config.scale and h == rows and r.ih == rows * rpx
         and info.wincol == 1 and info.width == vim.o.columns,
     }
+    shown[win].at = at(now)
+    shown[win].marked = r.marked
     for _, g in ipairs(r.pages) do
       shown[win].pages[g.page] = g
     end
@@ -204,7 +257,8 @@ end
 -- pump(win): move win's image toward its target, a strip of rows at a time.
 local function pump(win)
   local sh = shown[win]
-  if not sh or sh.busy or not sh.target or sh.target == sh.py then
+  -- (marking: once the cursor is drawn)
+  if not sh or sh.busy or sh.marking or not sh.target or sh.target == sh.py then
     return
   end
   local d = (sh.target - sh.py) / sh.rpx
@@ -220,7 +274,7 @@ local function pump(win)
   local h = math.abs(d) * sh.rpx
   renderer.request(vim.tbl_extend('force', {
     id = win, file = sh.file, page = sh.page, scale = sh.scale,
-    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png, select = sh.select, cursor = sh.cursor,
+    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png, select = sh.select, cursor = sh.cursor, look = sh.look,
     links = sh.links,
   }, sh.stack), function(r)
     if shown[win] ~= sh then
@@ -241,6 +295,9 @@ local function pump(win)
         row = d > 0 and b.row + b.h - d or b.row, col = b.col, w = b.w, h = math.abs(d),
       }, { win = win, before = roll(sh, d), roll = d, whole = b })
       sh.py = sh.py + d * sh.rpx
+      if sh.py == sh.target then
+        sh.at = at(vim.b[vim.api.nvim_win_get_buf(win)].pdf)
+      end
       for _, g in ipairs(r.pages) do
         sh.pages[g.page] = g
       end
@@ -248,6 +305,57 @@ local function pump(win)
     end)
     if vim.api.nvim_get_current_win() == win then
       status(vim.b.pdf)
+    end
+    pump(win)
+  end)
+end
+
+-- mark(win): show where win's cursor and selection are now. Its view where
+-- its frame shows it, only the rows they take and took: a few rows to draw
+-- and send, not the window's.
+function V.mark(win)
+  win = win or vim.api.nvim_get_current_win()
+  local sh, st = shown[win], vim.b[vim.api.nvim_win_get_buf(win)].pdf
+  if sh and sh.marking then
+    sh.again = true
+    return
+  end
+  if not (sh and st and not sh.busy and sh.sharp and (sh.target or sh.py) == sh.py
+      and vim.deep_equal(sh.at, at(st))) then
+    return V.redraw()
+  end
+  local select, look = V.selected(st), V.look(st)
+  sh.marking = true
+  renderer.request(vim.tbl_extend('force', {
+    id = win, file = sh.file, page = sh.page, scale = sh.scale, px = sh.px, py = sh.py,
+    width = sh.iw, height = sh.rows * sh.rpx, out = sh.png, select = select, cursor = st.cursor, look = look,
+    links = sh.links,
+    strip = { row = sh.rpx, keep = sh.marked },
+  }, sh.stack), function(r)
+    if shown[win] ~= sh then
+      return
+    end
+    sh.marking = false
+    if r.error then
+      return V.redraw()
+    end
+    sh.select, sh.cursor, sh.look = select, st.cursor, look
+    sh.marked = r.marked
+    local buf = vim.api.nvim_win_get_buf(win)
+    local now = vim.b[buf].pdf
+    now.selected = r.selected
+    vim.b[buf].pdf = now
+    if r.strip then
+      local b = sh.box
+      renderer.send(sh.png, { row = b.row + r.strip[1], col = b.col, w = b.w, h = r.strip[2] - r.strip[1] },
+        { win = win, whole = b })
+    end
+    if vim.api.nvim_get_current_win() == win then
+      status(now)
+    end
+    if sh.again then
+      sh.again = false
+      return V.mark(win)
     end
     pump(win)
   end)

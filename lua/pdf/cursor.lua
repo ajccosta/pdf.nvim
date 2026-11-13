@@ -135,8 +135,8 @@ function K.move(motion, count, o)
           table.insert(moving[buf], queued[i])
         end
       end)
-    else
-      view.redraw()
+    elseif vim.api.nvim_win_is_valid(win) then
+      view.mark(win)
     end
   end, true)
 end
@@ -198,7 +198,7 @@ function K.visual(lines)
   local from = st.visual or st.cursor
   st.visual = { page = from.page, x = from.x, y = from.y, lines = lines or nil }
   vim.b.pdf = st
-  view.redraw()
+  view.mark()
 end
 
 -- yank(): copy the text selected into the register (as y: "+y the clipboard,

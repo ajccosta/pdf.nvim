@@ -45,7 +45,10 @@ local function forget(buf)
     st.visual, st.selected, st.note = nil, nil, nil
     vim.b[buf].pdf = st
     if drawn then
-      view.redraw()
+      local win = vim.fn.bufwinid(buf)
+      if win > 0 then
+        view.mark(win)
+      end
     end
   end
 end
