@@ -52,6 +52,17 @@ vim.api.nvim_create_autocmd('TabLeave', {
     end
   end,
 })
+-- started with a PDF in a window of its own (-O, -o): nvim fills those windows
+-- with no BufEnter or BufLeave, so the cursor is hidden by the PDF's opening
+-- even where another file has the cursor; it follows the current buffer then
+vim.api.nvim_create_autocmd('VimEnter', {
+  group = group,
+  callback = function()
+    if package.loaded.pdf then
+      require('pdf').hide_cursor(vim.b.pdf ~= nil)
+    end
+  end,
+})
 -- CTRL-Z: the shell's cursor while suspended, hidden again on the way back
 vim.api.nvim_create_autocmd({ 'VimSuspend', 'VimResume' }, {
   group = group,
