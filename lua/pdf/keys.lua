@@ -10,7 +10,7 @@ local A = {}
 local function scroller(dx, dy, step)
   return function()
     local n = vim.v.count1
-    view.scroll(dx * n, dy * n, config[step])
+    view.scroll(dx * n, dy * n, config[step], config.glide[step])
   end
 end
 

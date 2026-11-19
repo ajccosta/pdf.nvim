@@ -250,7 +250,8 @@ end
 local sharp = assert(vim.uv.new_timer())
 
 -- Each window's glide (see glide): {left: the points still to go down (up
--- when < 0), at: where its last frame left the view, {page, y}}.
+-- when < 0), share: of it each frame, at: where its last frame left the
+-- view, {page, y}}.
 local gliding = {}
 
 -- redraw(clear, fast): draw every window's page; fast draws it at the
@@ -313,10 +314,10 @@ local function pump(win)
     -- not whole rows: all of it again
     return draw(win, false, config.scale)
   end
-  -- a glide: each frame a share of the way left (config.glide), at least a
+  -- a glide: each frame a share of the way left (sh.share), at least a
   -- row; more than the window still by rows, as a whole frame costs the
   -- terminal as much, and wipes the screen too
-  local n = math.min(math.max(1, math.ceil(math.abs(d) * config.glide)), sh.rows - 1)
+  local n = math.min(math.max(1, math.ceil(math.abs(d) * (sh.share or 1))), sh.rows - 1)
   d = d > 0 and math.min(d, n) or math.max(d, -n)
   sh.busy = true
   local py = d > 0 and sh.py + sh.rows * sh.rpx or sh.py + d * sh.rpx
@@ -410,8 +411,9 @@ function V.mark(win)
   end)
 end
 
--- roll_to(dy, step): scroll the current window by rows if it can, true if so.
-local function roll_to(dy, step)
+-- roll_to(dy, step, share): scroll the current window by rows if it can,
+-- each frame share of the way left, true if so.
+local function roll_to(dy, step, share)
   local win = vim.api.nvim_get_current_win()
   local sh, st = shown[win], vim.b.pdf
   if not (config.smooth and sh and sh.rolls and sh.page == st.page and not notes.covered(win)) then
@@ -423,7 +425,7 @@ local function roll_to(dy, step)
     return false -- on to another page
   end
   local rows = math.max(1, math.floor(math.abs(step) * sh.rows + 0.5))
-  sh.target = math.max(0, math.min(from + dy * rows * sh.rpx, last))
+  sh.target, sh.share = math.max(0, math.min(from + dy * rows * sh.rpx, last)), share
   sh.page, st.y = V.page_at(sh, sh.target)
   if st.page ~= sh.page then
     local g = sh.pages[sh.page]
@@ -435,8 +437,8 @@ local function roll_to(dy, step)
 end
 
 -- Windows that cannot scroll by rows (beside another window) glide too, a
--- whole frame each step, at the scrolling scale and sharp once there: each
--- frame a share of the way left (config.glide).
+-- whole frame each step, at the scrolling scale and sharp once it has
+-- stopped for a moment: each frame a share of the way left (g.share).
 
 local function glide(win)
   local g = gliding[win]
@@ -447,13 +449,18 @@ local function glide(win)
     gliding[win] = nil
     return
   end
-  -- the last few points in one go: frames too small to see still cost one
-  local d = math.abs(g.left) > 3 and g.left * config.glide or g.left
+  -- the last half row in one go: frames too small to see still cost one
+  local row = (st.vh or 0) / vim.api.nvim_win_get_height(win)
+  local d = math.abs(g.left) > row and g.left * g.share or g.left
   local y = math.min(st.y + d, st.my or 0)
   if math.abs(g.left) < 0.5 or y == st.y or (d < 0 and st.page == 0 and st.y <= 0) then
-    -- there, or at the document's end
+    -- there, or at the document's end: sharp unless more comes meanwhile
     gliding[win] = nil
-    return draw(win, false, config.scale)
+    return sharp:start(config.sharp_after, 0, vim.schedule_wrap(function()
+      if not gliding[win] then
+        draw(win, false, config.scale)
+      end
+    end))
   end
   g.left = g.left - d
   st.y = y
@@ -469,29 +476,31 @@ local function glide(win)
   end)
 end
 
--- glide_to(dy, step): glide the current window by dy steps of step of it,
--- true if it does.
-local function glide_to(dy, step)
+-- glide_to(dy, step, share): glide the current window by dy steps of step
+-- of it, each frame share of the way left, true if it does.
+local function glide_to(dy, step, share)
   local st = vim.b.pdf
-  if not (config.smooth and config.glide < 1 and V.continuous(st)) then
+  if not (config.smooth and share < 1 and V.continuous(st)) then
     return false
   end
   local win = vim.api.nvim_get_current_win()
   local g = gliding[win]
   if g then
-    g.left = g.left + dy * step * (st.vh or 0)
+    g.left, g.share = g.left + dy * step * (st.vh or 0), share
   else
-    gliding[win] = { left = dy * step * (st.vh or 0) }
+    gliding[win] = { left = dy * step * (st.vh or 0), share = share }
     sharp:stop()
     glide(win)
   end
   return true
 end
 
--- scroll(dx, dy, step): move by dx, dy steps of step of the window; past the
+-- scroll(dx, dy, step, share): move by dx, dy steps of step of the window,
+-- gliding share of the way left each frame (1, nil: at once); past the
 -- bottom or top of the page, on into the next or previous one.
-function V.scroll(dx, dy, step)
-  if dx == 0 and dy ~= 0 and (roll_to(dy, step) or glide_to(dy, step)) then
+function V.scroll(dx, dy, step, share)
+  share = share or 1
+  if dx == 0 and dy ~= 0 and (roll_to(dy, step, share) or glide_to(dy, step, share)) then
     return
   end
   V.update(function(st)

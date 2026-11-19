@@ -223,8 +223,10 @@ hints. <CR> on a comment shows it in the PDF's window.
     split_empty = true,   -- a split of a PDF's window starts empty
     smooth = true,        -- scroll by moving the page whole rows, drawing
                           -- only the rows that come in
-    glide = 0.35,         -- and glide: each frame goes this share of the
-                          -- way left; 1: jump there in one go
+    glide = { scroll = 0.6, wheel = 0.6 },  -- and glide, by the kind of
+                          -- step: each frame goes this share of the way
+                          -- left; 1, or a kind not listed (half: CTRL-D,
+                          -- CTRL-U): in one go, as in Vim
     frame = 8,            -- ms between a glide's frames
     continuous = true,    -- pages stacked and scrolled through without a
                           -- jump, at any zoom; false: one page at a time
