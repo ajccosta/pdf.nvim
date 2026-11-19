@@ -12,6 +12,10 @@ return {
   -- scroll by having the terminal move the page up or down whole rows and
   -- drawing only the rows that come in: sharp all along, and little to send
   smooth = true,
+  -- and glide there: each frame (frame ms apart) goes this share of the way
+  -- left, so a step slides in rather than jumping; 1: in one go
+  glide = 0.35,
+  frame = 8,
   -- scroll on from one page into the next, gap rows apart, instead of
   -- jumping to it (at any zoom, the whole page's too)
   continuous = true,

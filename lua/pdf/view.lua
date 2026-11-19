@@ -43,9 +43,10 @@ local function status(st)
   util.say({ { string.format('page %d/%d%s%s%s', st.page + 1, st.count or 0, zoom, notes, search) } })
 end
 
--- draw(win, clear, scale): render win's page and draw it. nvim's own redraw
--- (:mode) wipes the old image first when clear is set or the image's cells
--- change; otherwise the new image covers the old one, without a flicker.
+-- draw(win, clear, scale, done): render win's page and draw it, then
+-- done(true, r) with the renderer's answer r (done(false) when it could not). nvim's own redraw (:mode)
+-- wipes the old image first when clear is set or the image's cells change;
+-- otherwise the new image covers the old one, without a flicker.
 -- What each window shows, from its last whole frame on: its page, scale,
 -- offset in pixels (py), where its scroll is going (target), and its cells.
 local shown = {}
@@ -137,14 +138,15 @@ local function at(st)
   return { page = st.page, x = st.x, y = st.y, zoom = st.zoom, search = searching() }
 end
 
-local function draw(win, clear, scale)
+local function draw(win, clear, scale, done)
+  done = done or function() end
   if not vim.api.nvim_win_is_valid(win) then
-    return
+    return done(false)
   end
   local buf = vim.api.nvim_win_get_buf(win)
   local st = vim.b[buf].pdf
   if not st then
-    return
+    return done(false)
   end
   local info = vim.fn.getwininfo(win)[1]
   local cols, rows = info.width - info.textoff, info.height
@@ -165,7 +167,7 @@ local function draw(win, clear, scale)
     cols = notes_cols, sides = sides, lines = config.notes_lines > 0 and config.notes_lines or nil,
   } or nil
   if cols < 1 or rows < 1 then
-    return
+    return done(false)
   end
   vim.fn.mkdir(renderer.cache, 'p')
   local png = string.format('%s/%d-%d.png', renderer.cache, vim.fn.getpid(), win)
@@ -182,10 +184,11 @@ local function draw(win, clear, scale)
     links = links and vim.tbl_extend('force', links, { row = rpx }),
   }, stack), function(r)
     if r.error then
+      done(false)
       return vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
     end
     if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_win_get_buf(win) ~= buf then
-      return
+      return done(false)
     end
     local now = vim.b[buf].pdf
     now.commented, now.pw, now.ph = r.commented, r.pw, r.ph
@@ -193,7 +196,7 @@ local function draw(win, clear, scale)
       -- the first comment, the last gone, or the page's size now known: the
       -- comments' room changes
       vim.b[buf].pdf = now
-      return draw(win, true, scale)
+      return draw(win, true, scale, done)
     end
     -- what the renderer kept on the page, unless the state moved on meanwhile
     if now.page == st.page and now.x == st.x and now.y == st.y and now.zoom == st.zoom then
@@ -233,14 +236,22 @@ local function draw(win, clear, scale)
     if clear or not vim.deep_equal(vim.w[win].pdf_box, box) then
       vim.w[win].pdf_box = box
       vim.cmd('mode')
-      vim.schedule(function() renderer.send(png, box, { win = win }) end)
+      vim.schedule(function()
+        renderer.send(png, box, { win = win })
+        done(true, r)
+      end)
     else
       renderer.send(png, box, { win = win })
+      done(true, r)
     end
   end)
 end
 
 local sharp = assert(vim.uv.new_timer())
+
+-- Each window's glide (see glide): {left: the points still to go down (up
+-- when < 0), at: where its last frame left the view, {page, y}}.
+local gliding = {}
 
 -- redraw(clear, fast): draw every window's page; fast draws it at the
 -- scrolling scale now and sharp once it has stopped for a moment.
@@ -302,9 +313,11 @@ local function pump(win)
     -- not whole rows: all of it again
     return draw(win, false, config.scale)
   end
-  -- more than the window: still by rows, as many as it can at a time; a
-  -- whole frame costs the terminal as much, and wipes the screen too
-  d = math.max(-(sh.rows - 1), math.min(d, sh.rows - 1))
+  -- a glide: each frame a share of the way left (config.glide), at least a
+  -- row; more than the window still by rows, as a whole frame costs the
+  -- terminal as much, and wipes the screen too
+  local n = math.min(math.max(1, math.ceil(math.abs(d) * config.glide)), sh.rows - 1)
+  d = d > 0 and math.min(d, n) or math.max(d, -n)
   sh.busy = true
   local py = d > 0 and sh.py + sh.rows * sh.rpx or sh.py + d * sh.rpx
   local h = math.abs(d) * sh.rpx
@@ -342,7 +355,7 @@ local function pump(win)
     if vim.api.nvim_get_current_win() == win then
       status(vim.b.pdf)
     end
-    pump(win)
+    vim.defer_fn(function() pump(win) end, config.frame)
   end)
 end
 
@@ -421,10 +434,64 @@ local function roll_to(dy, step)
   return true
 end
 
+-- Windows that cannot scroll by rows (beside another window) glide too, a
+-- whole frame each step, at the scrolling scale and sharp once there: each
+-- frame a share of the way left (config.glide).
+
+local function glide(win)
+  local g = gliding[win]
+  local buf = vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win)
+  local st = buf and vim.b[buf].pdf
+  if not (g and st) or (g.at and (g.at.page ~= st.page or g.at.y ~= st.y)) then
+    -- gone, or moved elsewhere meanwhile (gg, a search, a click): that wins
+    gliding[win] = nil
+    return
+  end
+  -- the last few points in one go: frames too small to see still cost one
+  local d = math.abs(g.left) > 3 and g.left * config.glide or g.left
+  local y = math.min(st.y + d, st.my or 0)
+  if math.abs(g.left) < 0.5 or y == st.y or (d < 0 and st.page == 0 and st.y <= 0) then
+    -- there, or at the document's end
+    gliding[win] = nil
+    return draw(win, false, config.scale)
+  end
+  g.left = g.left - d
+  st.y = y
+  vim.b[buf].pdf = st
+  draw(win, false, config.scale_scrolling, function(ok, r)
+    local now = ok and vim.api.nvim_buf_is_valid(buf) and vim.b[buf].pdf
+    if not now or gliding[win] ~= g then
+      return
+    end
+    -- (moved elsewhere while this frame was drawn: the next one stops)
+    g.at = { page = r.page, y = r.y }
+    vim.defer_fn(function() glide(win) end, config.frame)
+  end)
+end
+
+-- glide_to(dy, step): glide the current window by dy steps of step of it,
+-- true if it does.
+local function glide_to(dy, step)
+  local st = vim.b.pdf
+  if not (config.smooth and config.glide < 1 and V.continuous(st)) then
+    return false
+  end
+  local win = vim.api.nvim_get_current_win()
+  local g = gliding[win]
+  if g then
+    g.left = g.left + dy * step * (st.vh or 0)
+  else
+    gliding[win] = { left = dy * step * (st.vh or 0) }
+    sharp:stop()
+    glide(win)
+  end
+  return true
+end
+
 -- scroll(dx, dy, step): move by dx, dy steps of step of the window; past the
 -- bottom or top of the page, on into the next or previous one.
 function V.scroll(dx, dy, step)
-  if dx == 0 and dy ~= 0 and roll_to(dy, step) then
+  if dx == 0 and dy ~= 0 and (roll_to(dy, step) or glide_to(dy, step)) then
     return
   end
   V.update(function(st)
