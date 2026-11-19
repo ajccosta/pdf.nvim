@@ -111,9 +111,10 @@ function V.look(st)
   }
 end
 
--- continuous(st): whether st's pages show stacked, one on from the other.
+-- continuous(st): whether st's pages show stacked, one on from the other:
+-- at every zoom, the whole page's too, so scrolling never turns into paging.
 function V.continuous(st)
-  return config.continuous and st.zoom ~= 1
+  return config.continuous
 end
 
 -- page_at(sh, py): the page at sh's pixel row py, and where in it in points.

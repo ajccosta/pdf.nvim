@@ -12,8 +12,8 @@ return {
   -- scroll by having the terminal move the page up or down whole rows and
   -- drawing only the rows that come in: sharp all along, and little to send
   smooth = true,
-  -- zoomed in or fitting the width, scroll on from one page into the next,
-  -- gap rows apart, instead of jumping to it
+  -- scroll on from one page into the next, gap rows apart, instead of
+  -- jumping to it (at any zoom, the whole page's too)
   continuous = true,
   gap = 1,
   view = 'width', -- a PDF opens fitting its width; 1 fits the whole page

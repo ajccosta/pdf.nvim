@@ -223,9 +223,8 @@ hints. <CR> on a comment shows it in the PDF's window.
     split_empty = true,   -- a split of a PDF's window starts empty
     smooth = true,        -- scroll by moving the page whole rows, drawing
                           -- only the rows that come in
-    continuous = true,    -- zoomed in or fitting the width, pages stacked
-                          -- and scrolled through without a jump; false:
-                          -- one page at a time
+    continuous = true,    -- pages stacked and scrolled through without a
+                          -- jump, at any zoom; false: one page at a time
     gap = 1,              -- rows between stacked pages
     position = { 'right', 'center' },  -- see :PdfPosition
     scroll = 0.1,         -- CTRL-E and CTRL-Y move a tenth of the window

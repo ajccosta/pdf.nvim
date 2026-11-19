@@ -63,6 +63,21 @@ vim.api.nvim_create_autocmd('VimEnter', {
     end
   end,
 })
+-- :!CMD: its output took the screen, the pages with it; drawn again once nvim
+-- has its screen back (SafeState: past the hit-enter prompt), not before,
+-- or nvim's own redraw wipes them
+vim.api.nvim_create_autocmd({ 'ShellCmdPost', 'ShellFilterPost' }, {
+  group = group,
+  callback = function()
+    if package.loaded.pdf then
+      vim.api.nvim_create_autocmd('SafeState', {
+        group = group,
+        once = true,
+        callback = function() require('pdf').redraw(true) end,
+      })
+    end
+  end,
+})
 -- CTRL-Z: the shell's cursor while suspended, hidden again on the way back
 vim.api.nvim_create_autocmd({ 'VimSuspend', 'VimResume' }, {
   group = group,
