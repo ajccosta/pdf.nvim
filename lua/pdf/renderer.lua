@@ -176,8 +176,12 @@ R.protocols = {
   -- iTerm2's inline images (iTerm2, WezTerm, Rio, VS Code)
   iterm = {
     detect = function() return vim.list_contains({ 'iTerm.app', 'WezTerm', 'rio', 'vscode' }, env.TERM_PROGRAM) end,
+    -- stretched to fill box's cells, as Kitty's are: kept in proportion, an
+    -- image whose pixels are a cell's only to the nearest whole one (cpx)
+    -- shrinks a little inside them, and a strip drawn over the page (a
+    -- selection's rows) no longer lines up with it, a gap at its edges
     image = function(data, box)
-      return string.format('\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\007',
+      return string.format('\027]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=0;doNotMoveCursor=1:%s\007',
         box.w, box.h, data)
     end,
     rolls = true,
