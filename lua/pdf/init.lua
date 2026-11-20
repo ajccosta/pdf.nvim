@@ -1,5 +1,5 @@
 -- pdf.nvim: `nvim file.pdf` shows its pages, drawn in the window as images, in
--- the terminal's image protocol (renderer.lua). PyMuPDF renders each page to a
+-- the terminal's image protocol (terminal.lua). PyMuPDF renders each page to a
 -- PNG, in a process kept running (python/render.py).
 local config = require('pdf.config')
 local state = require('pdf.state')
@@ -17,9 +17,10 @@ local public = {
   view = { 'redraw', 'go', 'scroll', 'zoom', 'fit_width', 'margin' },
   comments = { 'comments', 'export', 'edit_click', 'delete' },
   cursor = { 'motions', 'jumps', 'comment', 'move', 'jump', 'find', 'find_again', 'search', 'search_again', 'unsearch', 'visual', 'yank' },
-  mouse = { 'point', 'drag' },
+  mouse = { 'point', 'drag', 'at' },
+  synctex = { 'source', 'show' },
   keys = { 'mouse_actions' },
-  renderer = { 'clear' },
+  terminal = { 'clear' },
 }
 for part, names in pairs(public) do
   for _, k in ipairs(names) do
@@ -76,10 +77,10 @@ function M.open(buf)
   view.redraw(true)
   -- a terminal just opened may settle on its cell size only after it shows
   -- the window (WezTerm), its columns and lines the same: drawn again then
-  local renderer = require('pdf.renderer')
-  local cw, ch = renderer.cell_size()
+  local terminal = require('pdf.terminal')
+  local cw, ch = terminal.cell_size()
   vim.defer_fn(function()
-    local w, h = renderer.cell_size()
+    local w, h = terminal.cell_size()
     if w ~= cw or h ~= ch then
       view.redraw(true)
     end

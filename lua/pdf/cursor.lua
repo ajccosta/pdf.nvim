@@ -47,7 +47,7 @@ local moving = {} -- buffer: the motions waiting for the one out
 
 -- jumped(st): put st's cursor in its jump list, after where CTRL-O has gone
 -- back to (what was on from there goes, as with jumpoptions=stack).
-local function jumped(st)
+function K.jumped(st)
   local c = st.cursor
   if not c then
     return
@@ -96,7 +96,7 @@ function K.move(motion, count, o)
   end
   local st = vim.b.pdf
   if K.jumps[motion] then
-    jumped(st)
+    K.jumped(st)
     vim.b.pdf = st
   end
   local from = o.from or st.cursor
@@ -155,7 +155,7 @@ function K.jump(n)
   local st = vim.b.pdf
   if not st.jump then
     -- from the end: here too, for CTRL-I to come back to
-    jumped(st)
+    K.jumped(st)
     st.jump = #(st.jumps or {})
   end
   local to = st.jump - n

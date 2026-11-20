@@ -6,9 +6,7 @@ return {
   -- 'kitty' (Kitty, Ghostty), or 'auto', the terminal's
   protocol = 'auto',
   cell = { 9, 18 }, -- a cell's size in pixels to draw at (the width as the terminal's cells are shaped)
-  scale = 2, -- render this many times the screen size (retina)
-  scale_scrolling = 1, -- and this many while scrolling, which is faster
-  sharp_after = 150, -- ms without scrolling before the sharp frame
+  scale = 2, -- render this many times the screen size (retina), scrolling too
   -- scroll by having the terminal move the page up or down whole rows and
   -- drawing only the rows that come in: sharp all along, and little to send
   smooth = true,
@@ -45,6 +43,15 @@ return {
   -- back into a PDF opened without them (built again, or deleted and made
   -- anew): a highlight over the same words; false: only in the PDF
   store = vim.fn.stdpath('data') .. '/pdf.nvim/comments',
+  -- SyncTeX (TeX run with -synctex=1): a double click goes between the page
+  -- and its source
+  synctex = {
+    cmd = 'synctex',
+    dirs = { '.', 'build', 'out', '_build' }, -- where, from the PDF's directory, its .synctex.gz is
+    sources = { tex = true, plaintex = true, context = true }, -- the filetypes a double click shows in the PDF
+    flash = 'IncSearch', -- the source line found lights up a moment in this
+    flash_ms = 600,
+  },
   colors = {
     yellow = '#ffe873', orange = '#fab387', red = '#f38ba8', pink = '#f5c2e7',
     purple = '#cba6f7', blue = '#89b4fa', teal = '#94e2d5', green = '#a6e3a1',
@@ -103,6 +110,7 @@ return {
     drag = { '<LeftDrag>' },
     release = { '<LeftRelease>', '<2-LeftRelease>' },
     edit_click = { '<2-LeftMouse>' },
+    show_in_pdf = { '<2-LeftMouse>' },
     clear = { '<Esc>' },
     comment = { 'c' },
     delete = { 'x' },

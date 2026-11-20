@@ -4,6 +4,7 @@ local comments = require('pdf.comments')
 local config = require('pdf.config')
 local cursor = require('pdf.cursor')
 local mouse = require('pdf.mouse')
+local synctex = require('pdf.synctex')
 local view = require('pdf.view')
 local A = {}
 
@@ -32,7 +33,11 @@ local actions = {
   find_prev = function() cursor.find_again(true) end,
   jump_back = function() cursor.jump(vim.v.count1) end,
   jump_forward = function() cursor.jump(-vim.v.count1) end,
-  edit_click = function() comments.edit_click() end,
+  -- a comment there, else its source (SyncTeX)
+  edit_click = function(m)
+    comments.edit_click(function() synctex.source(mouse.at(m)) end)
+  end,
+  show_in_pdf = function(m) synctex.show(m) end,
   scroll_down = scroller(0, 1, 'scroll'),
   scroll_up = scroller(0, -1, 'scroll'),
   half_down = scroller(0, 1, 'half'),
@@ -71,47 +76,68 @@ end
 -- pass: over a PDF too the key still does its own (a click goes to the
 -- window), and the action after. press: the button goes down, so held ones
 -- (a drag, until release) go to that window wherever the mouse is.
+-- outside: in the window under the mouse that is not a PDF's instead. A
+-- key with several does the first that is for where the mouse is.
 A.mouse_actions = {
   wheel_down = {}, wheel_up = {}, wheel_left = {}, wheel_right = {},
   point = { pass = true, press = true },
   drag = { held = true },
   release = { held = true, release = true },
   edit_click = { press = true },
+  show_in_pdf = { pass = true, outside = true },
 }
 
 local held -- the PDF window the button went down in, until it comes up
 
 local mouse_mapped = false
 
+-- on_mouse(action, m): run action where the mouse m is, if it is for there;
+-- what the key then does, or nil when it is not.
+local function on_mouse(action, m)
+  local spec, win = A.mouse_actions[action], m.winid
+  if spec.held then
+    win = held
+    held = not spec.release and held or nil
+    if not win then
+      return
+    end
+  elseif win == 0 or (not vim.b[vim.api.nvim_win_get_buf(win)].pdf) ~= (spec.outside == true) then
+    return
+  elseif spec.press then
+    held = win
+  end
+  vim.schedule(function()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_call(win, function() actions[action](m) end)
+    end
+  end)
+  return spec.pass and true or false
+end
+
 local function map_mouse()
   if mouse_mapped then
     return
   end
   mouse_mapped = true
+  local by_key = {}
   for action in pairs(A.mouse_actions) do
     for _, key in ipairs(config.keys[action] or {}) do
-      vim.keymap.set({ 'n', 'v', 'i' }, key, function()
-        local spec, m = A.mouse_actions[action], vim.fn.getmousepos()
-        local win = m.winid
-        if spec.held then
-          win = held
-          held = not spec.release and held or nil
-          if not win then
-            return key
-          end
-        elseif win == 0 or not vim.b[vim.api.nvim_win_get_buf(win)].pdf then
-          return key
-        elseif spec.press then
-          held = win
-        end
-        vim.schedule(function()
-          if vim.api.nvim_win_is_valid(win) then
-            vim.api.nvim_win_call(win, function() actions[action](m) end)
-          end
-        end)
-        return spec.pass and key or ''
-      end, { expr = true, replace_keycodes = true, desc = 'pdf.nvim: ' .. action .. ' under the mouse' })
+      by_key[key] = by_key[key] or {}
+      table.insert(by_key[key], action)
     end
+  end
+  for key, list in pairs(by_key) do
+    table.sort(list)
+    vim.keymap.set({ 'n', 'v', 'i' }, key, function()
+      local m = vim.fn.getmousepos()
+      for _, action in ipairs(list) do
+        local pass = on_mouse(action, m)
+        if pass ~= nil then
+          return pass and key or ''
+        end
+      end
+      return key
+    end, { expr = true, replace_keycodes = true, desc = 'pdf.nvim: ' .. table.concat(list, ', ') .. ' under the mouse' })
   end
 end
 

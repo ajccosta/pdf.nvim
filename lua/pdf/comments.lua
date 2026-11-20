@@ -492,12 +492,15 @@ local function edit(buf, c, add)
   end)
 end
 
--- edit_click(m): a double click: edit the comment under the mouse.
-function C.edit_click()
+-- edit_click(otherwise): a double click: edit the comment under the mouse;
+-- with none there, otherwise().
+function C.edit_click(otherwise)
   local st = vim.b.pdf
   under(st, function(c)
     if c then
       edit(vim.api.nvim_get_current_buf(), c)
+    elseif otherwise then
+      otherwise()
     end
   end)
 end

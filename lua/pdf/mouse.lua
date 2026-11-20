@@ -10,7 +10,7 @@ local edit, forget = comments.edit, comments.forget
 
 -- at(m, clamp): the point on the current window's page under the mouse m (a
 -- getmousepos()), nil off the page unless clamp brings it onto it.
-local function at(m, clamp)
+function P.at(m, clamp)
   local sh = m and shown[vim.api.nvim_get_current_win()]
   if not sh then
     return
@@ -37,7 +37,7 @@ end
 function P.point(m)
   local buf = vim.api.nvim_get_current_buf()
   forget(buf)
-  local p = at(m)
+  local p = P.at(m)
   local st = vim.b.pdf
   if not p then
     local sh = shown[m.winid]
@@ -64,7 +64,7 @@ end
 
 -- drag(m): select the text from the spot clicked to the mouse.
 function P.drag(m)
-  local st, p = vim.b.pdf, at(m, true)
+  local st, p = vim.b.pdf, P.at(m, true)
   local from = st.visual or st.cursor
   if from and p and p.page == from.page then
     st.visual, st.cursor = st.visual or { page = from.page, x = from.x, y = from.y }, p

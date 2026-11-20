@@ -2,6 +2,7 @@
 local config = require('pdf.config')
 local notes = require('pdf.notes')
 local renderer = require('pdf.renderer')
+local terminal = require('pdf.terminal')
 local util = require('pdf.util')
 local V = {}
 
@@ -42,15 +43,6 @@ local function status(st)
   local search = V.search_on and '  ' .. (V.search.back and '?' or '/') .. V.search.pattern or ''
   util.say({ { string.format('page %d/%d%s%s%s', st.page + 1, st.count or 0, zoom, notes, search) } })
 end
-
--- draw(win, clear, scale, done): render win's page and draw it, then
--- done(true, r) with the renderer's answer r (done(false) when it could not). nvim's own redraw (:mode)
--- wipes the old image first when clear is set or the image's cells change;
--- otherwise the new image covers the old one, without a flicker.
--- What each window shows, from its last whole frame on: its page, scale,
--- offset in pixels (py), where its scroll is going (target), and its cells.
-local shown = {}
-V.shown = shown
 
 -- selected(st): the text selected, as render takes it: from where v (or V,
 -- whole lines) started to the cursor.
@@ -138,148 +130,168 @@ local function at(st)
   return { page = st.page, x = st.x, y = st.y, zoom = st.zoom, search = searching() }
 end
 
-local function draw(win, clear, scale, done)
-  done = done or function() end
+-- Drawing a window's page, at one scale (config.scale) always, so it never
+-- changes how sharp or how big it shows:
+--   layout(win, st): where the page goes in the window, in cells and pixels;
+--   draw(win, clear): a whole frame, rendered and drawn over the last;
+--   then, on a frame, one job at a time (see work): mark draws only the rows
+--   the cursor and the selection take and took; roll moves the rows a step
+--   of a scroll and draws only those that come in.
+
+-- layout(win, st): where st's page goes in win, or nil without room:
+-- { info (getwininfo's), all (the text's columns), cols, rows (the page's
+-- most), cpx, rpx (a cell's pixels), across (config.position's), margin (the
+-- comments' columns), links, stack (as render takes them), png (the image's
+-- file) }.
+local function layout(win, st)
+  local info = vim.fn.getwininfo(win)[1]
+  -- the last screen row scrolls the terminal
+  local all, rows = info.width - info.textoff, math.min(info.height, vim.o.lines - 1 - info.winrow)
+  local cw, ch = terminal.cell_size()
+  -- a cell's size in pixels: a row's whole, so rows stack exactly; a
+  -- column's as the terminal's are shaped, not rounded, or the image, which
+  -- the terminal stretches to its cells, is shaped by the rounding
+  local cpx, rpx = cw * config.scale, math.floor(ch * config.scale + 0.5)
+  -- the page sits where position says in all of the window, its comments'
+  -- text beside it: the page gets what leaves room for that
+  local across = util.fraction(config.position[1])
+  local margin = notes.margin(st, all, rows, cpx, rpx)
+  local cols = all - math.floor(margin * math.min(2, 1 / (1 - across)))
+  if cols < 1 or rows < 1 then
+    return
+  end
+  -- comments go left of the page too when it leaves room for them there
+  local sides = math.min(math.floor((all - cols) * across), all - margin - cols) >= margin
+    and { 'left', 'right' } or { 'right' }
+  -- the gap between pages: the window's background
+  local bg = vim.api.nvim_get_hl(0, { name = 'Normal', link = false }).bg
+  vim.fn.mkdir(renderer.cache, 'p')
+  return {
+    info = info, all = all, cols = cols, rows = rows, cpx = cpx, rpx = rpx, across = across, margin = margin,
+    links = margin > 0 and {
+      cols = margin, sides = sides, lines = config.notes_lines > 0 and config.notes_lines or nil, row = rpx,
+    } or nil,
+    stack = V.continuous(st) and {
+      continuous = true, gap = math.floor(config.gap * rpx + 0.5), bg = string.format('#%06x', bg or 0),
+    } or {},
+    png = string.format('%s/%d-%d.png', renderer.cache, vim.fn.getpid(), win),
+  }
+end
+
+-- box(lay, iw, ih): the cells an image iw x ih pixels takes in lay's window,
+-- { row, col, w, h }, on the screen.
+local function box(lay, iw, ih)
+  local w, h = math.min(lay.cols, math.ceil(iw / lay.cpx)), math.min(lay.rows, math.ceil(ih / lay.rpx))
+  return {
+    row = lay.info.winrow + math.floor((lay.rows - h) * util.fraction(config.position[2])),
+    col = lay.info.wincol + lay.info.textoff + math.min(math.floor((lay.all - w) * lay.across), lay.all - lay.margin - w),
+    w = w,
+    h = h,
+  }
+end
+
+-- What each window shows, from its last whole frame on (draw): { file,
+-- page (at its top), scale, px, py (its offset in pixels), target (the py
+-- its scroll goes to, py when still), share (of the way there each step),
+-- pxh, tops, iw, rows, cpx, rpx, box, png, select, cursor, look (as it was
+-- rendered), margin, links, stack, pages (each shown's {page, top, marks}),
+-- marked (the pixel rows marks take), at (the view it shows or goes to, as
+-- at() has it), full (it fills the window's height), busy (a job out),
+-- remark (marks to draw again) }.
+local shown = {}
+V.shown = shown
+
+-- draw(win, clear): render win's page and draw it, whole. nvim's own redraw
+-- (:mode) wipes the old image first when clear is set or the image's cells
+-- change; otherwise the new image covers the old one, without a flicker.
+local function draw(win, clear)
   if not vim.api.nvim_win_is_valid(win) then
-    return done(false)
+    return
   end
   local buf = vim.api.nvim_win_get_buf(win)
   local st = vim.b[buf].pdf
-  if not st then
-    return done(false)
+  local lay = st and layout(win, st)
+  if not lay then
+    return
   end
-  local info = vim.fn.getwininfo(win)[1]
-  local cols, rows = info.width - info.textoff, info.height
-  -- the page sits where position says in all of the window, its comments'
-  -- text right of it: the page gets what leaves room for that
-  -- the last screen row scrolls the terminal
-  rows = math.min(rows, vim.o.lines - 1 - info.winrow)
-  local cw, ch = renderer.cell_size()
-  -- a cell's size in pixels, whole so rows stack exactly
-  local cpx, rpx = math.floor(cw * scale + 0.5), math.floor(ch * scale + 0.5)
-  local all, across = cols, util.fraction(config.position[1])
-  local notes_cols = notes.margin(st, cols, rows, cpx, rpx)
-  cols = all - math.floor(notes_cols * math.min(2, 1 / (1 - across)))
-  -- comments go left of the page too when it leaves room for them there
-  local sides = math.min(math.floor((all - cols) * across), all - notes_cols - cols) >= notes_cols
-    and { 'left', 'right' } or { 'right' }
-  local links = notes_cols > 0 and {
-    cols = notes_cols, sides = sides, lines = config.notes_lines > 0 and config.notes_lines or nil,
-  } or nil
-  if cols < 1 or rows < 1 then
-    return done(false)
-  end
-  vim.fn.mkdir(renderer.cache, 'p')
-  local png = string.format('%s/%d-%d.png', renderer.cache, vim.fn.getpid(), win)
-  -- the gap between pages: the window's background
-  local bg = vim.api.nvim_get_hl(0, { name = 'Normal', link = false }).bg
-  local stack = V.continuous(st) and {
-    continuous = true, gap = math.floor(config.gap * rpx + 0.5), bg = string.format('#%06x', bg or 0),
-  } or {}
   shown[win] = nil
+  local select, look = V.selected(st), V.look(st)
   renderer.request(vim.tbl_extend('force', {
-    id = win, file = st.file, page = st.page, zoom = st.zoom,
-    x = st.x, y = st.y, out = png, width = cols * cpx, height = rows * rpx, select = V.selected(st),
-    cursor = st.cursor, look = V.look(st),
-    links = links and vim.tbl_extend('force', links, { row = rpx }),
-  }, stack), function(r)
+    id = win, file = st.file, page = st.page, zoom = st.zoom, x = st.x, y = st.y, out = lay.png,
+    width = math.floor(lay.cols * lay.cpx), height = lay.rows * lay.rpx,
+    select = select, cursor = st.cursor, look = look, links = lay.links,
+  }, lay.stack), function(r)
     if r.error then
-      done(false)
       return vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
     end
     if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_win_get_buf(win) ~= buf then
-      return done(false)
+      return
     end
     local now = vim.b[buf].pdf
     now.commented, now.pw, now.ph = r.commented, r.pw, r.ph
-    if notes.margin(now, all, rows, cpx, rpx) ~= notes_cols then
+    if notes.margin(now, lay.all, lay.rows, lay.cpx, lay.rpx) ~= lay.margin then
       -- the first comment, the last gone, or the page's size now known: the
       -- comments' room changes
       vim.b[buf].pdf = now
-      return draw(win, true, scale, done)
+      return draw(win, true)
     end
     -- what the renderer kept on the page, unless the state moved on meanwhile
-    if now.page == st.page and now.x == st.x and now.y == st.y and now.zoom == st.zoom then
+    local still = now.page == st.page and now.x == st.x and now.y == st.y and now.zoom == st.zoom
+    if still then
       now.page, now.x, now.y, now.zoom = r.page, r.x, r.y, r.zoom
     end
     now.count, now.mx, now.my, now.vw, now.vh, now.notes = r.count, r.mx, r.my, r.vw, r.vh, r.notes
     now.selected = r.selected
     vim.b[buf].pdf = now
-    local w = math.min(cols, math.ceil(r.iw / cpx))
-    local h = math.min(rows, math.ceil(r.ih / rpx))
-    local box = {
-      row = info.winrow + math.floor((rows - h) * util.fraction(config.position[2])),
-      col = info.wincol + info.textoff + math.min(math.floor((all - w) * across), all - notes_cols - w),
-      w = w,
-      h = h,
-    }
+    local b = box(lay, r.iw, r.ih)
     if vim.api.nvim_get_current_buf() == buf then
       status(now)
     end
-    shown[win] = {
-      file = st.file, page = r.page, scale = r.scale, px = r.px, py = r.py, pxh = r.pxh, tops = r.tops,
-      iw = r.iw, rows = rows, cpx = cpx, rpx = rpx, box = box, png = png, select = V.selected(st),
-      cursor = st.cursor, look = V.look(st),
-      margin = notes_cols, pages = {}, stack = stack, sharp = scale == config.scale,
-      links = links and vim.tbl_extend('force', links, { row = rpx }),
-      -- only a sharp frame filling the height of a window as wide as the
-      -- screen scrolls by rows: whole lines move
-      rolls = renderer.protocol().rolls and scale == config.scale and h == rows and r.ih == rows * rpx
-        and info.wincol == 1 and info.width == vim.o.columns,
+    local sh = {
+      file = st.file, page = r.page, scale = r.scale, px = r.px, py = r.py, target = r.py, share = 1,
+      pxh = r.pxh, tops = r.tops, iw = r.iw, rows = lay.rows, cpx = lay.cpx, rpx = lay.rpx, box = b, png = lay.png,
+      select = select, cursor = st.cursor, look = look, margin = lay.margin, links = lay.links, stack = lay.stack,
+      pages = {}, marked = r.marked,
+      -- (moved on: another frame comes)
+      at = still and at(now) or nil,
+      full = b.h == lay.rows and r.ih == lay.rows * lay.rpx,
     }
-    shown[win].at = at(now)
-    shown[win].marked = r.marked
     for _, g in ipairs(r.pages) do
-      shown[win].pages[g.page] = g
+      sh.pages[g.page] = g
     end
-    notes.draw(win, shown[win])
-    if clear or not vim.deep_equal(vim.w[win].pdf_box, box) then
-      vim.w[win].pdf_box = box
-      vim.cmd('mode')
-      vim.schedule(function()
-        renderer.send(png, box, { win = win })
-        done(true, r)
+    shown[win] = sh
+    notes.draw(win, sh)
+    if clear or not vim.deep_equal(vim.w[win].pdf_box, b) then
+      vim.w[win].pdf_box = b
+      -- the screen wiped and the page drawn in one frame, so the page never
+      -- shows gone in between
+      terminal.frame(function()
+        vim.cmd('mode')
+        vim.api.nvim__redraw({ flush = true, valid = false })
+        terminal.draw(win, lay.png, b)
       end)
     else
-      renderer.send(png, box, { win = win })
-      done(true, r)
+      terminal.draw(win, lay.png, b)
     end
   end)
 end
 
-local sharp = assert(vim.uv.new_timer())
-
--- Each window's glide (see glide): {left: the points still to go down (up
--- when < 0), share: of it each frame, at: where its last frame left the
--- view, {page, y}}.
-local gliding = {}
-
--- redraw(clear, fast): draw every window's page; fast draws it at the
--- scrolling scale now and sharp once it has stopped for a moment.
-function V.redraw(clear, fast)
+-- redraw(clear): draw every window's page, whole.
+function V.redraw(clear)
   vim.schedule(function()
-    local function all(c, scale)
-      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        draw(win, c, scale)
-      end
-    end
-    sharp:stop()
-    if fast and config.scale_scrolling < config.scale then
-      all(clear, config.scale_scrolling)
-      sharp:start(config.sharp_after, 0, vim.schedule_wrap(function() all(false, config.scale) end))
-    else
-      all(clear, config.scale)
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      draw(win, clear)
     end
   end)
 end
 
--- update(f, fast): change the current buffer's state with f, then draw it.
-function V.update(f, fast)
+-- update(f): change the current buffer's state with f, then draw it.
+function V.update(f)
   local st = vim.b.pdf
   f(st)
   st.page = math.max(0, math.min(st.page, (st.count or 1) - 1))
   vim.b.pdf = st
-  V.redraw(false, fast)
+  V.redraw(false)
 end
 
 -- go(n): show page n (1-based) of the current buffer, from its top.
@@ -289,65 +301,101 @@ function V.go(n)
   end)
 end
 
--- roll(sh, d): the escapes that move sh's rows d up (down when d < 0), image
--- and all. Whole lines: iTerm2 loses the images in cells it moves inside
--- left and right margins.
-local function roll(sh, d)
-  local b = sh.box
-  return table.concat({
-    string.format('\027[%d;%dr', b.row, b.row + b.h - 1),
-    string.format('\027[%d;%dH', b.row, b.col),
-    d > 0 and string.format('\027[%dS', d) or string.format('\027[%dT', -d),
-    '\027[r',
-  })
-end
-
--- pump(win): move win's image toward its target, a strip of rows at a time.
-local function pump(win)
-  local sh = shown[win]
-  -- (marking: once the cursor is drawn)
-  if not sh or sh.busy or sh.marking or not sh.target or sh.target == sh.py then
+-- beside(win, sh): the other windows in the rows sh's image takes, which
+-- its rolls move too: to send again after. nil when its rows cannot roll:
+-- the image short of the window's height, a window over its comments, or
+-- another window's page in its rows, which would move too.
+local function beside(win, sh)
+  if not (config.smooth and sh.full) or notes.covered(win) then
     return
   end
-  local d = (sh.target - sh.py) / sh.rpx
-  if d ~= math.floor(d) then
-    -- not whole rows: all of it again
-    return draw(win, false, config.scale)
+  local top, bottom, list = sh.box.row, sh.box.row + sh.box.h - 1, {}
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local i = vim.fn.getwininfo(w)[1]
+    -- its rows from its window bar to its status line (or the row past it)
+    if w ~= win and i.winrow - i.winbar <= bottom and i.winrow + i.height >= top then
+      if shown[w] then
+        return
+      end
+      list[#list + 1] = w
+    end
   end
-  -- a glide: each frame a share of the way left (sh.share), at least a
-  -- row; more than the window still by rows, as a whole frame costs the
-  -- terminal as much, and wipes the screen too
-  local n = math.min(math.max(1, math.ceil(math.abs(d) * (sh.share or 1))), sh.rows - 1)
-  d = d > 0 and math.min(d, n) or math.max(d, -n)
+  return list
+end
+
+-- job(win, sh, fields, done): render what sh shows, with fields, the only
+-- request out for its window until done(r) has the reply; a whole frame
+-- instead when it fails.
+local work
+local function job(win, sh, fields, done)
   sh.busy = true
-  local py = d > 0 and sh.py + sh.rows * sh.rpx or sh.py + d * sh.rpx
-  local h = math.abs(d) * sh.rpx
   renderer.request(vim.tbl_extend('force', {
-    id = win, file = sh.file, page = sh.page, scale = sh.scale,
-    px = sh.px, py = py, width = sh.iw, height = h, out = sh.png, select = sh.select, cursor = sh.cursor, look = sh.look,
-    links = sh.links,
-  }, sh.stack), function(r)
+    id = win, file = sh.file, page = sh.page, scale = sh.scale, px = sh.px, py = sh.py,
+    width = sh.iw, height = sh.rows * sh.rpx, out = sh.png,
+    select = sh.select, cursor = sh.cursor, look = sh.look, links = sh.links,
+  }, sh.stack, fields), function(r)
     if shown[win] ~= sh then
-      return
+      return -- drawn whole since
     end
     sh.busy = false
-    if r.error or r.py ~= py or r.ih ~= h or r.iw ~= sh.iw then
-      return draw(win, false, config.scale)
+    if r.error then
+      return draw(win)
     end
-    -- the comments' text moves with the lines too, where nvim does not know:
+    done(r)
+    work(win)
+  end)
+end
+
+-- mark(win, sh): draw where win's cursor and selection are now: of its view,
+-- only the rows they take and took, a few rows to render and send.
+local function mark(win, sh)
+  sh.remark = false
+  local buf = vim.api.nvim_win_get_buf(win)
+  local st = vim.b[buf].pdf
+  local select, look = V.selected(st), V.look(st)
+  job(win, sh, { select = select, cursor = st.cursor, look = look, strip = { row = sh.rpx, keep = sh.marked } },
+    function(r)
+      sh.select, sh.cursor, sh.look, sh.marked = select, st.cursor, look, r.marked
+      local now = vim.b[buf].pdf
+      now.selected = r.selected
+      vim.b[buf].pdf = now
+      if r.strip then
+        local b = sh.box
+        terminal.draw(win, sh.png, { row = b.row + r.strip[1], col = b.col, w = b.w, h = r.strip[2] - r.strip[1] }, b)
+      end
+      if vim.api.nvim_get_current_win() == win then
+        status(now)
+      end
+    end)
+end
+
+-- roll(win, sh): a step of sh's scroll: the terminal moves its rows, image
+-- and all, and only the rows that come in are rendered and drawn. Each step
+-- a share of the way left (sh.share), at least a row, at most the window's
+-- less one, as all of it costs as much as a whole frame.
+local function roll(win, sh)
+  local d = (sh.target - sh.py) / sh.rpx
+  if d ~= math.floor(d) or not beside(win, sh) then
+    return draw(win)
+  end
+  local n = math.min(math.max(1, math.ceil(math.abs(d) * sh.share)), sh.rows - 1)
+  d = d > 0 and math.min(d, n) or math.max(d, -n)
+  local py, h = d > 0 and sh.py + sh.rows * sh.rpx or sh.py + d * sh.rpx, math.abs(d) * sh.rpx
+  job(win, sh, { py = py, height = h }, function(r)
+    local wins = beside(win, sh)
+    if r.py ~= py or r.ih ~= h or r.iw ~= sh.iw or not wins then
+      return draw(win)
+    end
+    -- the comments' text moves with the rows too, where nvim does not know:
     -- gone first, to draw it again where it goes, all in one frame so it
     -- never shows gone
-    renderer.frame(function()
+    terminal.frame(function()
       notes.clear(win)
       vim.api.nvim__redraw({ flush = true })
       local b = sh.box
-      renderer.send(sh.png, {
-        row = d > 0 and b.row + b.h - d or b.row, col = b.col, w = b.w, h = math.abs(d),
-      }, { win = win, before = roll(sh, d), roll = d, whole = b })
+      terminal.roll(win, b, d, wins)
+      terminal.draw(win, sh.png, { row = d > 0 and b.row + b.h - d or b.row, col = b.col, w = b.w, h = math.abs(d) }, b)
       sh.py = sh.py + d * sh.rpx
-      if sh.py == sh.target then
-        sh.at = at(vim.b[vim.api.nvim_win_get_buf(win)].pdf)
-      end
       for _, g in ipairs(r.pages) do
         sh.pages[g.page] = g
       end
@@ -356,151 +404,73 @@ local function pump(win)
     if vim.api.nvim_get_current_win() == win then
       status(vim.b.pdf)
     end
-    vim.defer_fn(function() pump(win) end, config.frame)
   end)
 end
 
--- mark(win): show where win's cursor and selection are now. Its view where
--- its frame shows it, only the rows they take and took: a few rows to draw
--- and send, not the window's.
+-- work(win): win's frame's next job, once none is out: its marks first,
+-- then its scroll's next step, config.frame ms on.
+work = function(win)
+  local sh = shown[win]
+  if not sh or sh.busy then
+    return
+  end
+  if sh.remark then
+    return mark(win, sh)
+  end
+  if sh.target ~= sh.py then
+    sh.busy = true
+    vim.defer_fn(function()
+      if shown[win] == sh then
+        sh.busy = false
+        roll(win, sh)
+      end
+    end, config.frame)
+  end
+end
+
+-- mark(win): show where win's cursor and selection are now; a whole frame
+-- when it shows another view now.
 function V.mark(win)
   win = win or vim.api.nvim_get_current_win()
   local sh, st = shown[win], vim.b[vim.api.nvim_win_get_buf(win)].pdf
-  if sh and sh.marking then
-    sh.again = true
-    return
-  end
-  if not (sh and st and not sh.busy and sh.sharp and (sh.target or sh.py) == sh.py
-      and vim.deep_equal(sh.at, at(st))) then
+  if not (sh and st and vim.deep_equal(sh.at, at(st))) then
     return V.redraw()
   end
-  local select, look = V.selected(st), V.look(st)
-  sh.marking = true
-  renderer.request(vim.tbl_extend('force', {
-    id = win, file = sh.file, page = sh.page, scale = sh.scale, px = sh.px, py = sh.py,
-    width = sh.iw, height = sh.rows * sh.rpx, out = sh.png, select = select, cursor = st.cursor, look = look,
-    links = sh.links,
-    strip = { row = sh.rpx, keep = sh.marked },
-  }, sh.stack), function(r)
-    if shown[win] ~= sh then
-      return
-    end
-    sh.marking = false
-    if r.error then
-      return V.redraw()
-    end
-    sh.select, sh.cursor, sh.look = select, st.cursor, look
-    sh.marked = r.marked
-    local buf = vim.api.nvim_win_get_buf(win)
-    local now = vim.b[buf].pdf
-    now.selected = r.selected
-    vim.b[buf].pdf = now
-    if r.strip then
-      local b = sh.box
-      renderer.send(sh.png, { row = b.row + r.strip[1], col = b.col, w = b.w, h = r.strip[2] - r.strip[1] },
-        { win = win, whole = b })
-    end
-    if vim.api.nvim_get_current_win() == win then
-      status(now)
-    end
-    if sh.again then
-      sh.again = false
-      return V.mark(win)
-    end
-    pump(win)
-  end)
+  sh.remark = true
+  work(win)
 end
 
--- roll_to(dy, step, share): scroll the current window by rows if it can,
--- each frame share of the way left, true if so.
+-- roll_to(dy, step, share): scroll the current window dy steps of step of
+-- it by rolling its rows, each step share of the way left; false when it
+-- cannot (see beside), or the scroll goes on past what it shows.
 local function roll_to(dy, step, share)
   local win = vim.api.nvim_get_current_win()
   local sh, st = shown[win], vim.b.pdf
-  if not (config.smooth and sh and sh.rolls and sh.page == st.page and not notes.covered(win)) then
+  if not (sh and vim.deep_equal(sh.at, at(st)) and beside(win, sh)) then
     return false
   end
-  local from = sh.target or sh.py
   local last = sh.pxh - sh.rows * sh.rpx
-  if (dy > 0 and from >= last) or (dy < 0 and from <= 0) then
+  if (dy > 0 and sh.target >= last) or (dy < 0 and sh.target <= 0) then
     return false -- on to another page
   end
   local rows = math.max(1, math.floor(math.abs(step) * sh.rows + 0.5))
-  sh.target, sh.share = math.max(0, math.min(from + dy * rows * sh.rpx, last)), share
+  sh.target, sh.share = math.max(0, math.min(sh.target + dy * rows * sh.rpx, last)), share
   sh.page, st.y = V.page_at(sh, sh.target)
   if st.page ~= sh.page then
     local g = sh.pages[sh.page]
     st.page, st.notes = sh.page, g and #g.marks or st.notes
   end
   vim.b.pdf = st
-  pump(win)
-  return true
-end
-
--- Windows that cannot scroll by rows (beside another window) glide too, a
--- whole frame each step, at the scrolling scale and sharp once it has
--- stopped for a moment: each frame a share of the way left (g.share).
-
-local function glide(win)
-  local g = gliding[win]
-  local buf = vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win)
-  local st = buf and vim.b[buf].pdf
-  if not (g and st) or (g.at and (g.at.page ~= st.page or g.at.y ~= st.y)) then
-    -- gone, or moved elsewhere meanwhile (gg, a search, a click): that wins
-    gliding[win] = nil
-    return
-  end
-  -- the last half row in one go: frames too small to see still cost one
-  local row = (st.vh or 0) / vim.api.nvim_win_get_height(win)
-  local d = math.abs(g.left) > row and g.left * g.share or g.left
-  local y = math.min(st.y + d, st.my or 0)
-  if math.abs(g.left) < 0.5 or y == st.y or (d < 0 and st.page == 0 and st.y <= 0) then
-    -- there, or at the document's end: sharp unless more comes meanwhile
-    gliding[win] = nil
-    return sharp:start(config.sharp_after, 0, vim.schedule_wrap(function()
-      if not gliding[win] then
-        draw(win, false, config.scale)
-      end
-    end))
-  end
-  g.left = g.left - d
-  st.y = y
-  vim.b[buf].pdf = st
-  draw(win, false, config.scale_scrolling, function(ok, r)
-    local now = ok and vim.api.nvim_buf_is_valid(buf) and vim.b[buf].pdf
-    if not now or gliding[win] ~= g then
-      return
-    end
-    -- (moved elsewhere while this frame was drawn: the next one stops)
-    g.at = { page = r.page, y = r.y }
-    vim.defer_fn(function() glide(win) end, config.frame)
-  end)
-end
-
--- glide_to(dy, step, share): glide the current window by dy steps of step
--- of it, each frame share of the way left, true if it does.
-local function glide_to(dy, step, share)
-  local st = vim.b.pdf
-  if not (config.smooth and share < 1 and V.continuous(st)) then
-    return false
-  end
-  local win = vim.api.nvim_get_current_win()
-  local g = gliding[win]
-  if g then
-    g.left, g.share = g.left + dy * step * (st.vh or 0), share
-  else
-    gliding[win] = { left = dy * step * (st.vh or 0), share = share }
-    sharp:stop()
-    glide(win)
-  end
+  sh.at = at(st)
+  work(win)
   return true
 end
 
 -- scroll(dx, dy, step, share): move by dx, dy steps of step of the window,
--- gliding share of the way left each frame (1, nil: at once); past the
--- bottom or top of the page, on into the next or previous one.
+-- share of the way left each frame (1, nil: at once); past the bottom or top
+-- of the page, on into the next or previous one.
 function V.scroll(dx, dy, step, share)
-  share = share or 1
-  if dx == 0 and dy ~= 0 and (roll_to(dy, step, share) or glide_to(dy, step, share)) then
+  if dx == 0 and dy ~= 0 and roll_to(dy, step, share or 1) then
     return
   end
   V.update(function(st)
@@ -516,7 +486,7 @@ function V.scroll(dx, dy, step, share)
       st.y = math.max(0, math.min(st.y + dy * step * (st.vh or 0), st.my or 0))
     end
     st.x = math.max(0, math.min(st.x, st.mx or 0))
-  end, not (config.smooth and dx == 0)) -- sharp, to scroll by rows on from it
+  end)
 end
 
 -- zoom(by): zoom by a factor, keeping the middle of the window where it is;
