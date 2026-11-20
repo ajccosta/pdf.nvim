@@ -174,8 +174,8 @@ both ways, when TeX wrote its SyncTeX (`-synctex=1`, `latexmk -synctex=1`):
   window already showing that file, else the one you were in before, else a
   split beside the PDF. The line lights up a moment.
 - In a .tex file: the PDF in this tab moves its cursor to where that text is
-  (CTRL-O there goes back). The word is still selected, as a double-click
-  does.
+  (CTRL-O there goes back), and that line lights up there a moment. The
+  word is still selected, as a double-click does.
 
 The `synctex` command (TeX Live's) reads the `.synctex.gz`, found next to
 the PDF or in a build directory beside it (`synctex.dirs`):
@@ -184,7 +184,7 @@ the PDF or in a build directory beside it (`synctex.dirs`):
     cmd = 'synctex',
     dirs = { '.', 'build', 'out', '_build' },
     sources = { tex = true, plaintex = true, context = true }, -- filetypes
-    flash = 'IncSearch', flash_ms = 600,
+    flash = 'IncSearch', flash_ms = 600, -- the line lit, both sides
   },
 <
 ==============================================================================

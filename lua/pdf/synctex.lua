@@ -4,6 +4,7 @@
 -- command reads them.
 local config = require('pdf.config')
 local cursor = require('pdf.cursor')
+local view = require('pdf.view')
 local S = {}
 
 -- data(pdf): the directory with pdf's .synctex(.gz), next to it or in one of
@@ -104,9 +105,22 @@ function S.source(p)
   flash(0, line)
 end
 
+-- lit(list, page): the boxes of list's records on page (0-based), in points
+-- from the page's top left: where the line is there, to flash.
+local function lit(list, page)
+  local boxes = {}
+  for _, r in ipairs(list) do
+    local h, v, W, H = tonumber(r.h), tonumber(r.v), tonumber(r.W), tonumber(r.H)
+    if tonumber(r.Page) == page + 1 and h and v and W and H then
+      boxes[#boxes + 1] = { page = page, x0 = h, y0 = v - H, x1 = h + W, y1 = v }
+    end
+  end
+  return boxes
+end
+
 -- show(m): show in a PDF where the current file's text under the mouse m (a
 -- getmousepos()) is: the PDF's window in this tab that has it, the cursor
--- put there (CTRL-O there goes back).
+-- put there (CTRL-O there goes back), the line lit up a moment.
 function S.show(m)
   local file = vim.api.nvim_buf_get_name(0)
   if file == '' or vim.bo.buftype ~= '' or not config.synctex.sources[vim.bo.filetype] then
@@ -123,8 +137,20 @@ function S.show(m)
       return vim.api.nvim_win_call(w, function()
         st = vim.b.pdf
         cursor.jumped(st)
+        st.flash = lit(list, spot.page)
         vim.b.pdf = st
         cursor.move('here', 0, { from = spot })
+        local buf = vim.api.nvim_get_current_buf()
+        vim.defer_fn(function()
+          local now = vim.api.nvim_buf_is_valid(buf) and vim.b[buf].pdf
+          if now and now.flash then
+            now.flash = nil
+            vim.b[buf].pdf = now
+            if vim.api.nvim_win_is_valid(w) and vim.api.nvim_win_get_buf(w) == buf then
+              view.mark(w)
+            end
+          end
+        end, config.synctex.flash_ms)
       end)
     end
   end

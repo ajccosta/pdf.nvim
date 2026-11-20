@@ -23,7 +23,9 @@
 # paper, "cursor": {"fg", "bg", "shape": "block", "ver" or "hor", "size": of a
 # bar, in percent of the character}}, as Vim's Visual and Cursor and the
 # 'guicursor' shape; "search": {"fg", "bg", "pattern", "ignore"}: where
-# pattern matches (as matches() takes it), in Vim's Search colours. With
+# pattern matches (as matches() takes it), in Vim's Search colours; "flash":
+# {"fg", "bg"}: of "flash" [{"page", "x0", "y0", "x1", "y1"}, in points], the
+# boxes lit a moment (where SyncTeX puts a source line). With
 # "strip" {"row": a row's height in pixels, "keep": [y0, y1] or null, the
 # pixel rows marked before, as "marked" has them}, the
 # image is only the whole rows of the view those and the ones marked now
@@ -38,7 +40,7 @@
 # the document), "mx", "my" (the most they can be), "vw", "vh" (the window's
 # size), "pw", "ph" (page's size), all in points, "zoom", "scale", "px", "py",
 # "pxw", "pxh" (all that can show, in pixels), "marked" ([y0, y1]: the pixel
-# rows, as py counts them, the selection and the cursor take, or null), "tops" (continuous, at a zoom:
+# rows, as py counts them, the selection, the cursor and the flash take, or null), "tops" (continuous, at a zoom:
 # each page's top in pixels), "pages" (those the image shows, each {"page",
 # "top", "marks"}), "notes" (comments on page), "marks" (page's), "commented"
 # (whether any page has one)}. Marks are a page's comments, top to bottom,
@@ -758,6 +760,9 @@ def render(r):
             text, boxes, _ = selection(r["file"], mtime, q, sel)
             shade(part, [rc * scale for rc in boxes], look.get("visual"))
             reply["selected"] = text
+        lit = [fitz.Rect(f["x0"], f["y0"], f["x1"], f["y1"]) * scale for f in r.get("flash") or [] if f["page"] == n]
+        if lit:
+            shade(part, lit, look.get("flash"))
         cur = r.get("cursor")
         if cur and cur.get("page") == n and page_text(r["file"], mtime, q).chars:
             t = page_text(r["file"], mtime, q)
@@ -803,9 +808,10 @@ def save_png(pix, out):
 
 
 def marked(r, mtime, doc, scale, tops):
-    """Where r's selection and cursor are: [y0, y1], in pixels from the top
-    of the first page in tops (those shown), or None."""
-    ys = []
+    """Where r's selection, cursor and flash are: [y0, y1], in pixels from
+    the top of the first page in tops (those shown), or None."""
+    ys = [(tops[f["page"]] + f["y0"] * scale, tops[f["page"]] + f["y1"] * scale)
+          for f in r.get("flash") or [] if f["page"] in tops]
     sel, cur = r.get("select"), r.get("cursor")
     if sel and sel.get("page") in tops:
         q = doc[sel["page"]]

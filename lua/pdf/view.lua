@@ -65,9 +65,10 @@ local function colors(name)
   return { fg = fg, bg = bg }
 end
 
--- look(st): how the selection, the cursor and the search's matches look on
--- the page, as render takes it: as Vim's own, in the Visual, Cursor and
--- Search highlights (or Normal's colours, reversed, where they have none),
+-- look(st): how the selection, the cursor, the search's matches and the
+-- flash look on the page, as render takes it: as Vim's own, in the Visual,
+-- Cursor, Search and config.synctex.flash highlights (or Normal's colours,
+-- reversed, where they have none),
 -- the cursor's shape as 'guicursor' has it for Normal mode (Visual's while
 -- selecting).
 function V.look(st)
@@ -97,10 +98,12 @@ function V.look(st)
     local c = colors('Search')
     search.fg, search.bg = c.fg or normal.fg, c.bg or normal.fg
   end
+  local flash = colors(config.synctex.flash)
   return {
     visual = { fg = visual.fg or normal.fg, bg = visual.bg or normal.fg },
     cursor = cursor,
     search = search,
+    flash = { fg = flash.fg or normal.bg, bg = flash.bg or normal.fg },
   }
 end
 
@@ -193,7 +196,7 @@ end
 -- What each window shows, from its last whole frame on (draw): { file,
 -- page (at its top), scale, px, py (its offset in pixels), target (the py
 -- its scroll goes to, py when still), share (of the way there each step),
--- pxh, tops, iw, rows, cpx, rpx, box, png, select, cursor, look (as it was
+-- pxh, tops, iw, rows, cpx, rpx, box, png, select, cursor, flash, look (as it was
 -- rendered), margin, links, stack, pages (each shown's {page, top, marks}),
 -- marked (the pixel rows marks take), at (the view it shows or goes to, as
 -- at() has it), full (it fills the window's height), busy (a job out),
@@ -219,7 +222,7 @@ local function draw(win, clear)
   renderer.request(vim.tbl_extend('force', {
     id = win, file = st.file, page = st.page, zoom = st.zoom, x = st.x, y = st.y, out = lay.png,
     width = math.floor(lay.cols * lay.cpx), height = lay.rows * lay.rpx,
-    select = select, cursor = st.cursor, look = look, links = lay.links,
+    select = select, cursor = st.cursor, flash = st.flash, look = look, links = lay.links,
   }, lay.stack), function(r)
     if r.error then
       return vim.notify('pdf.nvim: ' .. r.error, vim.log.levels.ERROR)
@@ -250,7 +253,7 @@ local function draw(win, clear)
     local sh = {
       file = st.file, page = r.page, scale = r.scale, px = r.px, py = r.py, target = r.py, share = 1,
       pxh = r.pxh, tops = r.tops, iw = r.iw, rows = lay.rows, cpx = lay.cpx, rpx = lay.rpx, box = b, png = lay.png,
-      select = select, cursor = st.cursor, look = look, margin = lay.margin, links = lay.links, stack = lay.stack,
+      select = select, cursor = st.cursor, flash = st.flash, look = look, margin = lay.margin, links = lay.links, stack = lay.stack,
       pages = {}, marked = r.marked,
       -- (moved on: another frame comes)
       at = still and at(now) or nil,
@@ -332,7 +335,7 @@ local function job(win, sh, fields, done)
   renderer.request(vim.tbl_extend('force', {
     id = win, file = sh.file, page = sh.page, scale = sh.scale, px = sh.px, py = sh.py,
     width = sh.iw, height = sh.rows * sh.rpx, out = sh.png,
-    select = sh.select, cursor = sh.cursor, look = sh.look, links = sh.links,
+    select = sh.select, cursor = sh.cursor, flash = sh.flash, look = sh.look, links = sh.links,
   }, sh.stack, fields), function(r)
     if shown[win] ~= sh then
       return -- drawn whole since
@@ -346,16 +349,17 @@ local function job(win, sh, fields, done)
   end)
 end
 
--- mark(win, sh): draw where win's cursor and selection are now: of its view,
--- only the rows they take and took, a few rows to render and send.
+-- mark(win, sh): draw where win's cursor, selection and flash are now: of its
+-- view, only the rows they take and took, a few rows to render and send.
 local function mark(win, sh)
   sh.remark = false
   local buf = vim.api.nvim_win_get_buf(win)
   local st = vim.b[buf].pdf
   local select, look = V.selected(st), V.look(st)
-  job(win, sh, { select = select, cursor = st.cursor, look = look, strip = { row = sh.rpx, keep = sh.marked } },
+  local fields = { select = select, cursor = st.cursor, flash = st.flash, look = look }
+  job(win, sh, vim.tbl_extend('force', fields, { strip = { row = sh.rpx, keep = sh.marked } }),
     function(r)
-      sh.select, sh.cursor, sh.look, sh.marked = select, st.cursor, look, r.marked
+      sh.select, sh.cursor, sh.flash, sh.look, sh.marked = select, st.cursor, st.flash, look, r.marked
       local now = vim.b[buf].pdf
       now.selected = r.selected
       vim.b[buf].pdf = now
@@ -428,7 +432,7 @@ work = function(win)
   end
 end
 
--- mark(win): show where win's cursor and selection are now; a whole frame
+-- mark(win): show where win's cursor, selection and flash are now; a whole frame
 -- when it shows another view now.
 function V.mark(win)
   win = win or vim.api.nvim_get_current_win()

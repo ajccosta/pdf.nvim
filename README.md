@@ -88,7 +88,8 @@ reopens where you left it.
 
 A PDF built by TeX with `-synctex=1` links to its source, as in Overleaf: a
 double-click on the page opens the `.tex` there, and one in the `.tex` shows
-that spot in the PDF (`:help pdf.nvim-synctex`).
+that spot in the PDF; either side lights the line up a moment (`:help
+pdf.nvim-synctex`).
 
 ### Comments
 
