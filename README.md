@@ -4,7 +4,8 @@ Read and comment on PDFs inside Neovim. `nvim paper.pdf` shows the pages right
 in the window, sharp and smooth to scroll, and you move around them with the
 Vim keys you already know. Highlight text and write comments beside the page;
 they are saved in the PDF itself, so Preview, Acrobat or a browser show them
-too.
+too, and kept in a file of their own as well, so a PDF built again by LaTeX
+gets them back.
 
 ![pdf.nvim showing a page with colored highlights and their comments beside it](docs/demo.png)
 

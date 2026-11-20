@@ -41,6 +41,10 @@ return {
   -- (either way, fewer when the comments would not all fit in the window)
   -- new comments' colour: a name from colors or "#rrggbb"; see :PdfColor
   color = 'blue',
+  -- each PDF's comments are also kept in a file here, one per PDF, and put
+  -- back into a PDF opened without them (built again, or deleted and made
+  -- anew): a highlight over the same words; false: only in the PDF
+  store = vim.fn.stdpath('data') .. '/pdf.nvim/comments',
   colors = {
     yellow = '#ffe873', orange = '#fab387', red = '#f38ba8', pink = '#f5c2e7',
     purple = '#cba6f7', blue = '#89b4fa', teal = '#94e2d5', green = '#a6e3a1',

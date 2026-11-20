@@ -109,6 +109,12 @@ their lines.
 A PDF without comments keeps all of the window. The text's colour is
 `PdfNote`.
 
+Each PDF's comments are also kept in a file of their own, under `store`
+(|pdf.nvim-setup|). A PDF opened without some of them, built again by LaTeX
+or deleted and made anew, has them put back: a highlight over the same words,
+on its page or the nearest one that has them, and as a note where it was if
+they are gone; a note where it was.
+
 Select text (`v` and a motion, or a drag; it shows inverted, and the message
 line has it), then `c` comments on it: the comment is saved as a highlight of
 that text, with the comment as its note. Without a selection `c` comments at
@@ -238,6 +244,9 @@ hints. <CR> on a comment shows it in the PDF's window.
     zoom = 1.25,          -- each zoom step
     comments_width = 40,  -- the comments list's window
     editor_height = 8,    -- at most this many lines for a comment's buffer
+    store = vim.fn.stdpath('data') .. '/pdf.nvim/comments',  -- each PDF's
+                          -- comments kept here too, to put back into it
+                          -- once built again; false: only in the PDF
     notes_width = 40,     -- columns beside the page (each side) for its
                           -- comments' text; 0: none
     notes_min_width = 12, -- zoomed in, less room than this: no text

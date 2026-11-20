@@ -80,6 +80,7 @@ end
 
 local function start()
   renderer.proc = vim.system({ config.python, '-u', root .. '/python/render.py' }, {
+    env = config.store and { PDFNVIM_STORE = config.store } or nil,
     stdin = true,
     stdout = vim.schedule_wrap(function(_, data)
       if not data then

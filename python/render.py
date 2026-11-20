@@ -61,6 +61,10 @@
 # {"do": "set", "id", "content"} or {"do": "delete", "id"}: saves them into
 # the PDF, with what other readers need to open each comment (see tidy),
 # then replies as comments does, with "added": the new ones' ids.
+#
+# With PDFNVIM_STORE set to a directory, each PDF's comments are kept there
+# too, a JSON file each (see keep), and a PDF opened without some of them (built
+# again, or deleted and made anew) has them put back (see put_back).
 import getpass
 import hashlib
 import json
@@ -69,6 +73,7 @@ import re
 import select
 import struct
 import sys
+import time
 import unicodedata
 import uuid
 import zlib
@@ -87,12 +92,20 @@ MAX_PAGES = 16  # of each cache, the most recently used kept
 ahead = []  # what to draw next while idle: functions, the first first
 IDLE = 0.15  # seconds without a request before drawing ahead
 MAX_PIXELS = 40_000_000  # past this, only the part asked for is drawn
+STORE = os.environ.get("PDFNVIM_STORE")  # where each PDF's comments are kept too
+SETTLE = 1  # seconds a PDF stays unchanged before its comments are put back
+DRIFT = 5  # pages from where it was that a highlight's words are looked for
+checked = {}  # by file: the mtime it was last checked against its kept comments
 
 
 def document(file):
     mtime = os.stat(file).st_mtime
     if file not in docs or docs[file][0] != mtime:
         docs[file] = (mtime, fitz.open(file))
+    # not while it may still be being written (a build)
+    if STORE and checked.get(file) != mtime and time.time() - mtime > SETTLE:
+        checked[file] = mtime
+        put_back(file, *docs[file])
     return docs[file]
 
 
@@ -919,12 +932,12 @@ def change(doc, changes):
                 at = fitz.Point(x, y) * p.derotation_matrix
                 a = p.add_text_annot(at, c["content"], icon="Comment")
                 a.set_popup(beside(p, a))
-            a.set_info(content=c["content"], title=getpass.getuser())
+            a.set_info(content=c["content"], title=c.get("author") or getpass.getuser())
             if c.get("color"):
                 a.set_colors(stroke=[int(c["color"][i:i + 2], 16) / 255 for i in (1, 3, 5)])
             a.update()
             # its own name: PyMuPDF's start again with each opening
-            doc.xref_set_key(a.xref, "NM", fitz.get_pdf_str(str(uuid.uuid4())))
+            doc.xref_set_key(a.xref, "NM", fitz.get_pdf_str(c.get("name") or str(uuid.uuid4())))
             added.append(a.xref)
         elif c["do"] == "set":
             _, a = find(doc, int(c["id"]))
@@ -1019,6 +1032,16 @@ def remember(file, before, after):
     h["redo"] = []
 
 
+def save(file, doc):
+    if doc.can_save_incrementally():
+        doc.saveIncr()
+    else:
+        tmp = file + ".pdfnvim-tmp"
+        doc.save(tmp, garbage=1, deflate=True)
+        os.replace(tmp, file)
+    docs.pop(file, None)
+
+
 def apply(r):
     file = r["file"]
     _, doc = document(file)
@@ -1029,14 +1052,9 @@ def apply(r):
     except Exception:
         docs.pop(file, None)  # not half the changes in the next save
         raise
-    if doc.can_save_incrementally():
-        doc.saveIncr()
-    else:
-        tmp = file + ".pdfnvim-tmp"
-        doc.save(tmp, garbage=1, deflate=True)
-        os.replace(tmp, file)
-    docs.pop(file, None)
+    save(file, doc)
     remember(file, before, read(file))
+    keep(file, *document(file))
     return dict(comments(r), added=added)
 
 
@@ -1065,10 +1083,120 @@ def undo(r):
         docs.pop(file, None)
         give.append(take.pop())
         done += 1
+    if done:
+        keep(file, *document(file))
     out = comments(r)
     now = {(c["id"], c["content"], c["page"]) for c in out["comments"]}
     pages = [page for _, _, page in was ^ now]
     return dict(out, done=done, stale=stale, page=min(pages) if pages else None)
+
+
+def kept_at(file):
+    return os.path.join(STORE, os.path.abspath(file).replace(os.sep, "%") + ".json")
+
+
+def kept(file):
+    """file's comments as keep last kept them."""
+    try:
+        with open(kept_at(file), encoding="utf-8") as f:
+            return json.load(f)["comments"]
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+def name(p, a):
+    """a's own name (NM), else one from where it is and what it says."""
+    return a.info.get("id") or f"{p.number}:{a.type[1]}:{a.info.get('content', '')}"
+
+
+def keep(file, mtime, doc):
+    """Write doc's comments to file's own file in STORE, each {"name", "page",
+    "type", "content", "author", "color", "rect" (as shown), "text" (a
+    highlight's words)}, to put back (put_back) once the PDF is built again."""
+    if not STORE:
+        return
+    old = {k["name"]: k for k in kept(file)}
+    now = []
+    for p in doc:
+        for a in p.annots():
+            if not is_comment(a):
+                continue
+            stroke = a.colors.get("stroke")
+            k = dict(name=name(p, a), page=p.number, type=a.type[1], content=a.info.get("content", ""),
+                     author=a.info.get("title", ""), color=stroke and "#%02x%02x%02x" % tuple(round(c * 255) for c in stroke),
+                     rect=list(a.rect * p.rotation_matrix), text=highlighted(file, mtime, p, a)["text"])
+            # a highlight put back as a note, its words not found: looked for again next time
+            if not k["text"] and old.get(k["name"], {}).get("text"):
+                k["text"] = old[k["name"]]["text"]
+            now.append(k)
+    if now != list(old.values()):
+        os.makedirs(STORE, exist_ok=True)
+        write(kept_at(file), json.dumps(dict(file=os.path.abspath(file), comments=now), indent=1).encode())
+
+
+def squash(text):
+    """Letters only, lower case: the same through spacing, line breaks,
+    hyphens, ligatures and punctuation, and through numbers that change with
+    a build (line numbers in the margin, citations)."""
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if c.isalpha()).lower()
+
+
+def anchor(file, mtime, doc, k):
+    """Where kept highlight k's words are now: (page, a select as render takes
+    it), on the nearest page to where it was that has them, nearest its old
+    place there; or None."""
+    want = squash(k["text"])
+    if not want:
+        return None
+    was = fitz.Point(k["rect"][:2])
+    for n in sorted(range(max(0, k["page"] - DRIFT), min(len(doc), k["page"] + DRIFT + 1)),
+                    key=lambda n: abs(n - k["page"])):
+        t = page_text(file, mtime, doc[n])
+        letters, owner = [], []
+        for ch, o in zip(*t.flat()):
+            for c in squash(ch):
+                letters.append(c), owner.append(o)
+        letters = "".join(letters)
+        spans, i = [], letters.find(want)
+        while i >= 0:
+            spans.append((owner[i], owner[i + len(want) - 1]))
+            i = letters.find(want, i + 1)
+        if spans:
+            a, b = min(spans, key=lambda s: t.chars[s[0]][0].tl.distance_to(was))
+            mid = [dict(x=(r.x0 + r.x1) / 2, y=(r.y0 + r.y1) / 2) for r in (t.chars[a][0], t.chars[b][0])]
+            return n, dict(a=mid[0], b=mid[1])
+    return None
+
+
+def put_back(file, mtime, doc):
+    """Add back the comments kept for file (keep) that doc lacks: a highlight
+    over its words again (anchor), as a note where it was if they are gone,
+    and a note where it was. Saves file if any, then keeps its comments."""
+    try:
+        have = {name(p, a) for p in doc for a in p.annots() if is_comment(a)}
+        adds = []
+        for k in kept(file):
+            if k["name"] in have or not len(doc):
+                continue
+            add = dict(do="add", name=k["name"], content=k["content"], author=k.get("author"), color=k.get("color"))
+            found = anchor(file, mtime, doc, k)
+            if found:
+                add.update(page=found[0], select=found[1], x=0, y=0)
+            else:
+                add.update(page=min(k["page"], len(doc) - 1), x=k["rect"][0], y=k["rect"][1])
+            adds.append(add)
+        if adds:
+            change(doc, adds)
+            tidy(doc)
+            save(file, doc)
+            mtime = os.stat(file).st_mtime
+            docs[file] = (mtime, fitz.open(file))
+            checked[file] = mtime
+            doc = docs[file][1]
+        keep(file, mtime, doc)
+    except Exception as e:
+        docs[file] = (os.stat(file).st_mtime, fitz.open(file))  # not half of it in the next save
+        print(f"comments not put back: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
 ops = dict(render=render, comments=comments, at=at, apply=apply, undo=undo, move=move)
