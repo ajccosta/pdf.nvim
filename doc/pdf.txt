@@ -134,6 +134,12 @@ so does a click on a note, or on a comment's text beside the page, and a
 double-click on a highlight (a single click on one moves the cursor and shows
 its text in the message line). `x` deletes the comment under the cursor,
 once confirmed.
+A link in a comment's text beside the page (https://..., file:///...) is
+underlined (`PdfLink`), and a click on it opens it: a file in a tab of its
+own, anything else with what the system opens it with (|vim.ui.open()|).
+The terminal is told each link's whole address too (OSC 8), so its own way
+of opening links (Cmd-click in iTerm2) opens all of it, though the box
+breaks it over several lines.
 
 `u` undoes the last change saved to the PDF's comments, whichever comment it
 was on, and `<C-r>` redoes it, as Vim does a buffer's: changing comment 1,

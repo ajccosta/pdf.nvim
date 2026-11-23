@@ -1,5 +1,6 @@
 -- A click and a drag on the page.
 local comments = require('pdf.comments')
+local notes = require('pdf.notes')
 local renderer = require('pdf.renderer')
 local util = require('pdf.util')
 local view = require('pdf.view')
@@ -33,7 +34,8 @@ local function show_comment(c)
 end
 
 -- point(m): a click: the cursor goes there, where a drag selecting text
--- starts; on a comment, or its text beside the page, show it.
+-- starts; on a comment, or its text beside the page, show it; on a link in
+-- that text, open it.
 function P.point(m)
   local buf = vim.api.nvim_get_current_buf()
   forget(buf)
@@ -43,6 +45,10 @@ function P.point(m)
     local sh = shown[m.winid]
     local side = sh and m.screencol < sh.box.col and 'left' or 'right'
     local c = sh and sh.noted and sh.noted[side][m.winrow - 1]
+    local url = c and notes.link(sh, side, m.winrow - 1, m.wincol - 1)
+    if url then
+      return util.open(url)
+    end
     if c then
       st.note = { id = c.id, content = c.content, page = c.page }
       vim.b.pdf = st

@@ -65,6 +65,7 @@ end
 
 local ns = vim.api.nvim_create_namespace('pdf.nvim')
 vim.api.nvim_set_hl(0, 'PdfNote', { default = true, link = 'Normal' })
+vim.api.nvim_set_hl(0, 'PdfLink', { default = true, link = 'Underlined' })
 
 -- hl(color): the highlight group in color ("#rrggbb"), defined once: defining
 -- one redraws the whole screen, too slow for each scroll step.
@@ -245,13 +246,17 @@ end
 -- text beside them, each in a box in its colour, placed by place() over all
 -- of the window's rows, a line in that colour from the row of where it is. A
 -- line that has to go up or down to its box does so in a lane of its own
--- (route()), so lines never cross or merge.
+-- (route()), so lines never cross or merge. A link in the text is underlined
+-- (PdfLink) and carries its url, so the terminal opens all of it though the
+-- box breaks it over lines; sh.words has each row's words for a click on
+-- one (N.link()).
 -- Laid out as on the right, then mirrored for the left.
 local function draw(win, sh)
   if not sh or not vim.api.nvim_win_is_valid(win) then
     return N.unnote(win)
   end
   sh.noted, sh.boxes, sh.layout = { left = {}, right = {} }, {}, nil
+  sh.words = { left = {}, right = {} }
   if sh.margin == 0 then
     return N.unnote(win)
   end
@@ -298,14 +303,72 @@ local function draw(win, sh)
   for _, m in ipairs(found) do
     local row = first + math.floor((m.top + m.y * sh.scale - sh.py) / sh.rpx)
     if row >= first and row < first + b.h then
-      table.insert(on[m.side], { m = m, row = row, text = util.wrap(util.text(m.content), width) })
+      local text, parts = util.wrap(util.text(m.content), width)
+      table.insert(on[m.side], { m = m, row = row, text = text, parts = parts })
     end
   end
   local bar = string.rep('─', sh.margin - 2)
-  sh.layout = { textoff = info.textoff, to = to, first = first }
+  sh.layout = { textoff = info.textoff, to = to, first = first, cols = cols, width = width }
+  -- Each line of a comment's text in pieces ({ col: in the line, s, url: of
+  -- a link's }). A link's piece is its float's own text under a mark with
+  -- its url, which only real text can carry; the rest is virtual text over
+  -- empty lines. The lines are set before anything is marked: setting them
+  -- after would move the marks.
+  local base = { left = cols - to - 1 - width, right = to + 1 - past.right } -- the text's column in its float
   for side, items in pairs(on) do
     place(items, info.height)
     route(items)
+    local lines = vim.fn['repeat']({ '' }, info.height)
+    for _, it in ipairs(items) do
+      it.pieces = {}
+      for i, l in ipairs(it.lines) do
+        local pieces, at = {}, 0
+        for _, p in ipairs(it.parts[i] or {}) do
+          local url = util.link(p.word)
+          if url and p.col >= at then
+            pieces[#pieces + 1] = { col = at, s = vim.fn.strcharpart(l, at, p.col - at) }
+            pieces[#pieces + 1] = { col = p.col, s = vim.fn.strcharpart(l, p.col, p.w), url = url }
+            at = p.col + p.w
+          end
+        end
+        pieces[#pieces + 1] = { col = at, s = vim.fn.strcharpart(l, at) }
+        it.pieces[i] = pieces
+        local row = it.t + i
+        if row >= 0 and row < info.height then
+          local line = lines[row + 1]
+          for _, piece in ipairs(pieces) do
+            if piece.url and piece.s ~= '' then
+              line = line .. string.rep(' ', math.max(base[side] + piece.col - vim.fn.strdisplaywidth(line), 0))
+              piece.byte = #line
+              line = line .. piece.s
+            end
+          end
+          lines[row + 1] = line
+        end
+      end
+    end
+    local buf = bufs[side]
+    if buf and not vim.deep_equal(vim.api.nvim_buf_get_lines(buf, 0, -1, false), lines) then
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    end
+  end
+  -- write(side, row, piece, m): a piece of comment m's text on row.
+  local function write(side, row, piece, m)
+    if row < 0 or row >= info.height or not bufs[side] then
+      return
+    end
+    sh.noted[side][row] = m
+    if piece.byte then
+      vim.api.nvim_buf_set_extmark(bufs[side], ns, row, piece.byte,
+        { end_col = piece.byte + #piece.s, hl_group = 'PdfLink', url = piece.url })
+    elseif piece.s ~= '' then
+      vim.api.nvim_buf_set_extmark(bufs[side], ns, row, 0, {
+        virt_text = { { piece.s, piece.url and 'PdfLink' or 'PdfNote' } },
+        virt_text_win_col = base[side] + piece.col, virt_text_pos = 'overlay',
+      })
+    end
+  end
+  for side, items in pairs(on) do
     local from = past[side]
     for _, it in ipairs(items) do
       local m, t = it.m, it.t
@@ -314,7 +377,10 @@ local function draw(win, sh)
       put(side, t, to - 1, '┌' .. bar .. '┐', hl)
       for i, l in ipairs(it.lines) do
         put(side, t + i, to - 1, t + i == it.into and '┤' or '│', hl)
-        put(side, t + i, to + 1, l, 'PdfNote', m, width)
+        for _, piece in ipairs(it.pieces[i]) do
+          write(side, t + i, piece, m)
+        end
+        sh.words[side][t + i] = it.parts[i]
         put(side, t + i, cols - 1, '│', hl)
       end
       put(side, t + #it.lines + 1, to - 1, '└' .. bar .. '┘', hl)
@@ -329,6 +395,22 @@ local function draw(win, sh)
         end
         put(side, it.into, lane, (down and '╰' or '╭') .. string.rep('─', to - 2 - lane), hl)
       end
+    end
+  end
+end
+
+-- link(sh, side, row, col): the link under column col of the window (from
+-- 0) on row of side's comments, as sh has them drawn; nil when none.
+function N.link(sh, side, row, col)
+  local l, parts = sh.layout, sh.words and sh.words[side][row]
+  if not l or not parts then
+    return
+  end
+  local from = side == 'left' and l.cols - l.to - 1 - l.width or l.to + 1
+  col = col - l.textoff - from
+  for _, p in ipairs(parts) do
+    if col >= p.col and col < p.col + p.w then
+      return util.link(p.word)
     end
   end
 end
@@ -368,10 +450,15 @@ function N.box(sh, id, at)
 end
 
 -- clear(win): take win's comments' text off the screen, to draw it again
--- where the page's rows move it.
+-- where the page's rows move it: the marks, and the links' own text.
 function N.clear(win)
   for _, f in pairs(sides[win] or {}) do
-    vim.api.nvim_buf_clear_namespace(vim.api.nvim_win_get_buf(f), ns, 0, -1)
+    local buf = vim.api.nvim_win_get_buf(f)
+    vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    if table.concat(lines) ~= '' then
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.fn['repeat']({ '' }, #lines))
+    end
   end
 end
 

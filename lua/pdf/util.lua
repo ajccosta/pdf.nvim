@@ -19,27 +19,60 @@ function U.text(content)
   return lines
 end
 
--- wrap(lines, width): lines broken at spaces to fit width columns.
+-- wrap(lines, width): lines broken at spaces to fit width columns. Also, for
+-- each line it gives, its words: { col: where it starts (from 0), w: its
+-- columns, word: the whole word, of which a long one is on several lines }.
 function U.wrap(lines, width)
-  local out = {}
+  local out, parts = {}, {}
   for _, l in ipairs(lines) do
-    local line = ''
+    local line, on = '', {}
+    local function push()
+      out[#out + 1] = line
+      parts[#out] = on
+      line, on = '', {}
+    end
     for word in l:gmatch('%S+') do
+      local whole = word
       while vim.fn.strdisplaywidth(word) > width do
         if line ~= '' then
-          out[#out + 1], line = line, ''
+          push()
         end
-        out[#out + 1], word = vim.fn.strcharpart(word, 0, width), vim.fn.strcharpart(word, width)
+        line, on = vim.fn.strcharpart(word, 0, width), { { col = 0, w = width, word = whole } }
+        push()
+        word = vim.fn.strcharpart(word, width)
       end
       if line ~= '' and vim.fn.strdisplaywidth(line .. ' ' .. word) > width then
-        out[#out + 1], line = line, word
-      else
-        line = line == '' and word or line .. ' ' .. word
+        push()
       end
+      on[#on + 1] = { col = line == '' and 0 or vim.fn.strdisplaywidth(line) + 1, w = vim.fn.strdisplaywidth(word), word = whole }
+      line = line == '' and word or line .. ' ' .. word
     end
-    out[#out + 1] = line
+    push()
   end
-  return out
+  return out, parts
+end
+
+-- link(word): the link in word (https://..., file:///...), without what a
+-- sentence puts around it; nil when it has none.
+function U.link(word)
+  local url = word and word:match('%a[%w+.-]*://[^%s<>"]+')
+  return url and (url:gsub('[.,;:!?)%]}\']+$', ''))
+end
+
+-- open(url): a file in a tab of its own (a PDF shows here), the rest by
+-- what the system opens it with.
+function U.open(url)
+  if url:match('^file:') then
+    local path = vim.uri_to_fname(url)
+    if not vim.uv.fs_stat(path) then
+      return vim.notify('pdf.nvim: no file ' .. path, vim.log.levels.WARN)
+    end
+    return vim.cmd.tabedit(vim.fn.fnameescape(path))
+  end
+  local _, err = vim.ui.open(url)
+  if err then
+    vim.notify('pdf.nvim: ' .. err, vim.log.levels.WARN)
+  end
 end
 
 -- buf_win(buf): a window of this tab showing buf.
