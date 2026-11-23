@@ -18,6 +18,15 @@ vim.api.nvim_create_autocmd('BufWinEnter', {
     end
   end,
 })
+-- nvim's cursor hidden over a PDF (its page shows one), and only there
+vim.api.nvim_create_autocmd({ 'BufEnter', 'WinEnter', 'VimEnter' }, {
+  group = group,
+  callback = function()
+    if package.loaded.pdf then
+      require('pdf').hide_cursor(vim.b.pdf ~= nil)
+    end
+  end,
+})
 vim.api.nvim_create_autocmd('WinClosed', {
   group = group,
   callback = function(ev)

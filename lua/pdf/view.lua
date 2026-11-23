@@ -65,10 +65,26 @@ local function colors(name)
   return { fg = fg, bg = bg }
 end
 
+-- light(hex): how light the colour is, 0 to 1 (its luma).
+local function light(hex)
+  local r, g, b = tonumber(hex:sub(2, 3), 16), tonumber(hex:sub(4, 5), 16), tonumber(hex:sub(6, 7), 16)
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+end
+
+-- on_paper(c): c ({fg, bg}) to stand out on a page's white paper: its
+-- colours swapped where its bg is the lighter (a dark scheme's cursor, cream
+-- on dark text, would all but vanish there).
+local function on_paper(c)
+  if light(c.bg) > light(c.fg) then
+    c.fg, c.bg = c.bg, c.fg
+  end
+  return c
+end
+
 -- look(st): how the selection, the cursor, the search's matches and the
 -- flash look on the page, as render takes it: as Vim's own, in the Visual,
 -- Cursor, Search and config.synctex.flash highlights (or Normal's colours,
--- reversed, where they have none),
+-- reversed, where they have none), the cursor dark on the paper (on_paper),
 -- the cursor's shape as 'guicursor' has it for Normal mode (Visual's while
 -- selecting).
 function V.look(st)
@@ -85,7 +101,8 @@ function V.look(st)
         local shape, size = part:match('^(%a+)(%d*)$')
         if shape == 'block' or shape == 'ver' or shape == 'hor' then
           cursor.shape, cursor.size = shape, tonumber(size)
-        elseif part:match('^%u') then
+        elseif part:match('^%u') and not part:match('^PdfHiddenCursor') then
+          -- (not the one hiding nvim's own over the page: window.hide_cursor)
           group = part:match('^[^/]+')
         end
       end
@@ -93,6 +110,7 @@ function V.look(st)
   end
   local c = colors(group)
   cursor.fg, cursor.bg = c.bg and c.fg or normal.bg, c.bg or normal.fg
+  on_paper(cursor)
   local search = searching()
   if search then
     local c = colors('Search')

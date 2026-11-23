@@ -37,6 +37,9 @@ end
 
 -- hide_cursor(hide): hide nvim's own cursor (in Normal and Visual mode), the
 -- page's text cursor being the one that counts over a PDF; or show it again.
+-- As the current window's buffer is a PDF or not (plugin/pdf.lua): a PDF's
+-- own BufEnter and BufLeave miss a window gone to at startup (nvim a.tex
+-- b.pdf -O), or a window closed.
 local guicursor
 function W.hide_cursor(hide)
   if hide and not guicursor then

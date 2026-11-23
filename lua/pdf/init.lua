@@ -70,9 +70,7 @@ function M.open(buf)
     buffer = buf,
     callback = function() state.keep_view(buf) end,
   })
-  vim.api.nvim_create_autocmd('BufEnter', { group = group, buffer = buf, callback = function() window.hide_cursor(true) end })
-  vim.api.nvim_create_autocmd('BufLeave', { group = group, buffer = buf, callback = function() window.hide_cursor(false) end })
-  window.hide_cursor(true)
+  window.hide_cursor(vim.b.pdf ~= nil)
   window.window_options(true)
   view.redraw(true)
   -- a terminal just opened may settle on its cell size only after it shows
