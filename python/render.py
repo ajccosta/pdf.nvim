@@ -564,7 +564,10 @@ def marks(file, mtime, p, links=None, scale=1):
     return cached(laid, key, lambda: lay_out(p, links, scale))
 
 
-def lay_out(p, links, scale):
+def ordered(p):
+    """p's comments in reading order, as (annotation, first rect, colour):
+    neighbours of one colour alternate it with a lighter shade, to tell
+    them apart."""
     found = []
     for a in p.annots():
         if not is_comment(a):
@@ -576,6 +579,16 @@ def lay_out(p, links, scale):
             first = a.rect * p.rotation_matrix
         found.append((a, first, a.colors.get("stroke") or (1, 0.85, 0)))
     found.sort(key=lambda f: (f[1].y0, f[1].x0))
+    prev, odd, out = None, False, []
+    for a, first, color in found:
+        odd = not odd if color == prev else False
+        prev = color
+        out.append((a, first, tuple(c + (1 - c) * 0.35 for c in color) if odd else color))
+    return out
+
+
+def lay_out(p, links, scale):
+    found = ordered(p)
     sides = links["sides"] if links else ["right"]
     row, width = (links["row"] / scale, max(1, links["cols"] - 4)) if links else (0, 1)
     most = links.get("lines") if links else None
@@ -608,6 +621,13 @@ def sheet(file, mtime, p):
     def make():
         one = fitz.open()
         one.insert_pdf(p.parent, from_page=p.number, to_page=p.number)
+        page = one[0]
+        for a, _, color in ordered(page):
+            if a.colors.get("stroke") != list(color) and a.type[0] in HIGHLIGHTS:
+                a.set_colors(stroke=color)
+                a.update()
+        a = None
+        del page  # kept past bake, it would draw the annotations again
         one.bake()
         return one, one[0]  # one kept alive with its page
 
