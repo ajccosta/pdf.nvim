@@ -48,8 +48,11 @@ local function run(args, pdf)
   return list
 end
 
--- flash(buf, line): light up line a moment, to find it.
+-- flash(buf, line): light up line a moment, to find it. buf a number, not 0:
+-- the current buffer then may be another by the time it goes out (a click
+-- more, back on the PDF).
 local function flash(buf, line)
+  buf = buf == 0 and vim.api.nvim_get_current_buf() or buf
   local ns = vim.api.nvim_create_namespace('pdf.synctex')
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   vim.api.nvim_buf_set_extmark(buf, ns, line - 1, 0, { line_hl_group = config.synctex.flash, priority = 200 })
