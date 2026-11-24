@@ -35,7 +35,7 @@ end
 
 -- point(m): a click: the cursor goes there, where a drag selecting text
 -- starts; on a comment, or its text beside the page, show it; on a link in
--- that text, open it.
+-- that text, or one of the page's own not under a comment, open it.
 function P.point(m)
   local buf = vim.api.nvim_get_current_buf()
   forget(buf)
@@ -61,6 +61,9 @@ function P.point(m)
   view.mark()
   op({ op = 'at', file = st.file, page = p.page, x = p.x, y = p.y }, function(r)
     -- a note's icon is for its text; a highlight's text, to select too
+    if r.link and not r.comment then
+      return util.open(r.link)
+    end
     if r.comment and r.comment.type == 'Text' then
       return edit(buf, r.comment)
     end

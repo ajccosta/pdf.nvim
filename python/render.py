@@ -52,7 +52,7 @@
 # "order" (where it is in its page's reading order)}}.
 #
 # at: {"file", "page", "x", "y"}: {"comment": the one there, as comments has
-# it, or null}.
+# it, or null; "link": the URL of the page's own link there (link_at), or null}.
 #
 # move: {"file", "page", "x", "y", "motion", ...}: where a text cursor goes;
 # see move.
@@ -917,6 +917,26 @@ def covers(p, a, pt):
     return pt in a.rect * p.rotation_matrix
 
 
+# A link's target as a URL to open, by the link's kind (fitz.LINK_*): one
+# entry each; a path is from the PDF's folder.
+def path_url(file, path):
+    return "file://" + os.path.join(os.path.dirname(os.path.abspath(file)), path)
+
+
+targets = {
+    fitz.LINK_URI: lambda file, l: l.get("uri"),
+    fitz.LINK_LAUNCH: lambda file, l: l.get("file") and path_url(file, l["file"]),
+    fitz.LINK_GOTOR: lambda file, l: l.get("file") and path_url(file, l["file"]) + "#page=%d" % (l.get("page", 0) + 1),
+}
+
+
+def link_at(file, p, pt):
+    """The URL of the link at pt on page p, as targets gives it; None."""
+    for l in p.get_links():
+        if l["from"].contains(pt) and l["kind"] in targets:
+            return targets[l["kind"]](file, l)
+
+
 def at(r):
     mtime, doc = document(r["file"])
     p = doc[int(r["page"])]
@@ -929,7 +949,7 @@ def at(r):
         if pt.distance_to(c) < (c.y1 - c.y0) / 2:
             mid = fitz.Point((c.x0 + c.x1) / 2, (c.y0 + c.y1) / 2)
             hits = [a for a in p.annots() if is_comment(a) and covers(p, a, mid)]
-    return dict(comment=describe(p, hits[-1]) if hits else None)
+    return dict(comment=describe(p, hits[-1]) if hits else None, link=link_at(r["file"], p, pt))
 
 
 def find(doc, xref):
@@ -1195,14 +1215,18 @@ def anchor(file, mtime, doc, k):
 
 
 def put_back(file, mtime, doc):
-    """Add back the comments kept for file (keep) that doc lacks: a highlight
+    """Add back the comments kept for file (keep) that doc lacks, by authors
+    with none in doc (not the build's own, made again): a highlight
     over its words again (anchor), as a note where it was if they are gone,
     and a note where it was. Saves file if any, then keeps its comments."""
     try:
         have = {name(p, a) for p in doc for a in p.annots() if is_comment(a)}
+        # who wrote doc's own comments (a build's, as its notes): their kept
+        # ones that doc lacks were made again, changed, or taken out, not lost
+        authors = {a.info.get("title") for p in doc for a in p.annots() if is_comment(a)} - {"", None}
         adds = []
         for k in kept(file):
-            if k["name"] in have or not len(doc):
+            if k["name"] in have or k.get("author") in authors or not len(doc):
                 continue
             add = dict(do="add", name=k["name"], content=k["content"], author=k.get("author"), color=k.get("color"))
             found = anchor(file, mtime, doc, k)
