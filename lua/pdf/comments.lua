@@ -380,11 +380,12 @@ local function close_on_leave(win, ebuf)
   })
 end
 
--- inplace(pwin, where, ebuf, hl): a window on ebuf over the box where(sh)
+-- inplace(pwin, where, ebuf, hl, id): a window on ebuf over the box where(sh)
 -- gives (as notes.box does; sh: what pwin shows) beside the page in pwin, as
 -- tall as all of its text and at least the box, and with it as the page
--- scrolls; the page drawn again once it closes, for what it covered.
-local function inplace(pwin, where, ebuf, hl)
+-- scrolls; the box of comment id() as tall too (notes.hold), the others
+-- making room; the page drawn again once it closes, for what it covered.
+local function inplace(pwin, where, ebuf, hl, id)
   local spot = where(view.shown[pwin])
   local win = vim.api.nvim_open_win(ebuf, true, {
     relative = 'win', win = pwin, row = spot.row, col = spot.col, width = spot.width, height = 1,
@@ -395,12 +396,18 @@ local function inplace(pwin, where, ebuf, hl)
   wo.wrap, wo.linebreak, wo.foldcolumn = true, true, '1' -- a column of room left, as in the box
   wo.winhighlight = 'NormalFloat:Normal,FloatBorder:' .. hl .. ',FloatFooter:' .. hl
   -- fit(): as tall as its text, moved up when that would go past the bottom
+  local holding -- the comment whose rows it holds
   local function fit()
     if not vim.api.nvim_win_is_valid(win) or not vim.api.nvim_win_is_valid(pwin) then
       return
     end
     local room = vim.api.nvim_win_get_height(pwin) - 2
-    local h = math.max(spot.height, math.min(vim.api.nvim_win_text_height(win, {}).all, room))
+    local h = math.min(vim.api.nvim_win_text_height(win, {}).all, room)
+    holding = id() or holding
+    if holding then
+      notes.hold(pwin, holding, h) -- its box drawn as tall (calls fit again, where it is then)
+    end
+    h = math.max(spot.height, h)
     vim.api.nvim_win_set_config(win, {
       relative = 'win', win = pwin, row = math.max(0, math.min(spot.row, room - h)), col = spot.col, height = h,
     })
@@ -413,7 +420,12 @@ local function inplace(pwin, where, ebuf, hl)
     fit()
   end)
   vim.api.nvim_create_autocmd('WinClosed', {
-    pattern = tostring(win), once = true, callback = function() view.redraw() end,
+    pattern = tostring(win), once = true, callback = function()
+      if holding then
+        notes.hold(pwin, holding, nil)
+      end
+      view.redraw()
+    end,
   })
   return win
 end
@@ -458,15 +470,18 @@ local function edit(buf, c, add)
   end
   local pwin = buf_win(buf)
   -- the comment's box, the new one's too once saved
-  local function where(sh)
+  local function id()
     local e = editors[ebuf]
-    return notes.box(sh, e and e.id or c and c.id, add)
+    return e and e.id or c and c.id
+  end
+  local function where(sh)
+    return notes.box(sh, id(), add)
   end
   local spot = pwin and where(view.shown[pwin])
   local win
   if spot then
     local hl = spot.hl or notes.hl(color())
-    win = inplace(pwin, where, ebuf, hl)
+    win = inplace(pwin, where, ebuf, hl, id)
   else
     local height = math.max(3, math.min(config.editor_height, #lines + 1))
     win = vim.api.nvim_open_win(ebuf, true, { split = 'below', win = pwin or 0, height = height })

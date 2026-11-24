@@ -102,6 +102,25 @@ function N.follow(win, float, f)
   over[win][float] = f
 end
 
+-- Rows held for comments being edited over their boxes: win: { [id] = n },
+-- that comment's box n lines tall whatever its text, so the others are
+-- placed around its editor, not under it.
+local held = {}
+
+-- hold(win, id, n): hold n lines for comment id beside win's page (nil: let
+-- go), drawing win's comments again when that changes.
+function N.hold(win, id, n)
+  held[win] = held[win] or {}
+  if held[win][id] == n then
+    return
+  end
+  held[win][id] = n
+  local sh = require('pdf.view').shown[win]
+  if sh and vim.api.nvim_win_is_valid(win) then
+    N.draw(win, sh)
+  end
+end
+
 -- covered(win): whether a window is over win's comments; its rows then must
 -- not roll, which would move it too, where nvim does not know.
 function N.covered(win)
@@ -169,8 +188,9 @@ local function clip(lines, most)
 end
 
 -- place(items, height): each of a side's items, top to bottom ({ row: of what
--- it is on, text: its lines }), its box: .lines, at most notes_lines of its
--- text, or fewer when that leaves them all within height rows; .t, its top,
+-- it is on, text: its lines, hold: rows held for it }), its box:
+-- .lines, at most notes_lines of its text, or fewer when that leaves them all
+-- within height rows (hold lines, if held); .t, its top,
 -- in order and apart, within height when they fit and, all told, as near as
 -- they can be to each first line on its row (least squares: runs of boxes
 -- that would overlap go where their rows are on average); .into, the row its
@@ -186,7 +206,7 @@ local function place(items, height)
   local function rows(most)
     local n = 0
     for _, it in ipairs(items) do
-      n = n + math.max(math.min(#it.text, most), 1) + 2
+      n = n + (it.hold or math.max(math.min(#it.text, most), 1)) + 2
     end
     return n
   end
@@ -197,7 +217,10 @@ local function place(items, height)
   -- go up: pool adjacent ones that would
   local above, runs = 0, {}
   for i, it in ipairs(items) do
-    it.lines = clip(#it.text > 0 and it.text or { '' }, most)
+    it.lines = clip(#it.text > 0 and it.text or { '' }, it.hold or most)
+    while it.hold and #it.lines < it.hold do
+      it.lines[#it.lines + 1] = ''
+    end
     it.above = above
     above = above + #it.lines + 2
     runs[#runs + 1] = { sum = it.row - 1 - it.above, n = 1, from = i }
@@ -304,7 +327,7 @@ local function draw(win, sh)
     local row = first + math.floor((m.top + m.y * sh.scale - sh.py) / sh.rpx)
     if row >= first and row < first + b.h then
       local text, parts = util.wrap(util.text(m.content), width)
-      table.insert(on[m.side], { m = m, row = row, text = text, parts = parts })
+      table.insert(on[m.side], { m = m, row = row, text = text, parts = parts, hold = (held[win] or {})[m.id] })
     end
   end
   local bar = string.rep('─', sh.margin - 2)
