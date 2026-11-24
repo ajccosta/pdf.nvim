@@ -34,6 +34,9 @@ pb "Add :CFBundleDocumentTypes:0:CFBundleTypeName string PDF"
 pb "Add :CFBundleDocumentTypes:0:CFBundleTypeRole string Editor"
 pb "Add :CFBundleDocumentTypes:0:LSItemContentTypes array"
 pb "Add :CFBundleDocumentTypes:0:LSItemContentTypes:0 string com.adobe.pdf"
-codesign --force --sign - "$app"  # again, after the changes above
+# again, after the changes above; with the hardened runtime, so dyld leaves
+# out DYLD_* a launcher passes on (a patched iTerm's DYLD_INSERT_LIBRARIES,
+# relative to its app, would have the droplet die looking in its own bundle)
+codesign --force --sign - --options runtime "$app"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
 echo "made $app"
